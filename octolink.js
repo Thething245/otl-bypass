@@ -344,6 +344,95 @@
       if (level === 'error') setStatus('gặp lỗi', 'bad');
       else if (level === 'success') setStatus('thành công', null);
       else if (level === 'system' || level === 'warn') setStatus('đang xử lý…', 'busy');
+      return entry;
+    }
+
+    // ====================================================================
+    // BỘ NHỚ CAMPAIGN — ghi nhớ nhiệm vụ đã làm để lần sau tự điền link
+    // ====================================================================
+    const MEM_KEY = 'octo_done_campaigns_v1';
+    function memRead() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(MEM_KEY, null);
+        if (raw === null || raw === undefined) raw = localStorage.getItem(MEM_KEY);
+        if (!raw) return {};
+        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (err) {
+        return {};
+      }
+    }
+    function memWrite(store) {
+      var text = JSON.stringify(store);
+      try {
+        if (typeof GM_setValue === 'function') GM_setValue(MEM_KEY, text);
+      } catch (err) {}
+      try {
+        localStorage.setItem(MEM_KEY, text);
+      } catch (err) {}
+    }
+    function memNormalize(value) {
+      return String(value || '')
+        .toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/\.html?$/, '')
+        .replace(/[^a-z0-9]+/g, '');
+    }
+    // Ghi nhớ / cập nhật một nhiệm vụ. Gọi nhiều lần an toàn, chỉ merge thêm.
+    function rememberCampaign(id, patch) {
+      if (!id) return;
+      try {
+        var store = memRead();
+        var prev = store[id] || {};
+        var next = {
+          slug: prev.slug || id,
+          name: patch.name || prev.name || '',
+          domain: patch.domain || prev.domain || '',
+          finalUrl: patch.finalUrl || prev.finalUrl || '',
+          runs: (prev.runs || 0) + (patch.countRun ? 1 : 0),
+          ts: Date.now()
+        };
+        store[id] = next;
+        // giữ tối đa 300 bản ghi, bỏ cái cũ nhất
+        var keys = Object.keys(store);
+        if (keys.length > 300) {
+          keys
+            .sort(function (a, b) {
+              return (store[a].ts || 0) - (store[b].ts || 0);
+            })
+            .slice(0, keys.length - 300)
+            .forEach(function (k) {
+              delete store[k];
+            });
+        }
+        memWrite(store);
+      } catch (err) {}
+    }
+    // Tìm bản ghi cũ: khớp chính xác id, rồi khớp mờ theo slug/tên campaign.
+    function recallCampaign(id, campaignName) {
+      try {
+        var store = memRead();
+        if (id && store[id] && (store[id].domain || store[id].finalUrl)) {
+          return { key: id, exact: true, data: store[id] };
+        }
+        var wantSlug = memNormalize(id);
+        var wantName = memNormalize(campaignName);
+        var keys = Object.keys(store);
+        for (var i = 0; i < keys.length; i++) {
+          var rec = store[keys[i]];
+          if (!rec || (!rec.domain && !rec.finalUrl)) continue;
+          var recSlug = memNormalize(rec.slug || keys[i]);
+          var recName = memNormalize(rec.name);
+          var slugHit =
+            wantSlug.length >= 4 &&
+            recSlug.length >= 4 &&
+            (recSlug === wantSlug || recSlug.includes(wantSlug) || wantSlug.includes(recSlug));
+          var nameHit = wantName.length >= 4 && recName.length >= 4 && recName === wantName;
+          if (slugHit || nameHit) return { key: keys[i], exact: false, data: rec };
+        }
+      } catch (err) {}
+      return null;
     }
     setStatus('sẵn sàng', 'busy');
     setRail(4);
@@ -381,6 +470,21 @@
             pageHtml.includes('h-captcha') ||
             document.querySelector('.h-captcha') ||
             document.querySelector('[name="h-captcha-response"]');
+        function announceFinalLink(url) {
+          rememberCampaign(missionId, { finalUrl: url, countRun: true });
+          log(
+            'LINK GỐC: <a href="' +
+              url +
+              '" target="_blank" rel="noreferrer" style="color:#67e8f9;text-decoration:underline">' +
+              url +
+              '</a>',
+            'success'
+          );
+          log('Tự động mở link sau 2 giây...', 'system');
+          setTimeout(function () {
+            window.location.href = url;
+          }, 2000);
+        }
         function submitFormAndFindLink(form) {
           log('Đang thiết lập kết nối an toàn để trích xuất liên kết...', 'system');
           let body = new URLSearchParams(),
@@ -425,19 +529,19 @@
                       goFormMatch[0].match(/name=["']url["'][^>]+value=["']([^"']+)["']/i) ||
                       goFormMatch[0].match(/value=["'](https?:\/\/[^"']+)["']/i);
                     if (fieldName && isFinalLink(fieldName[1])) {
-                      log('🏆 LINK GỐC: ' + fieldName[1], 'success');
+                      announceFinalLink(fieldName[1]);
                       return;
                     }
                   }
                 }
-                if (linkMatch) log('🏆 LINK GỐC: ' + linkMatch[1], 'success');
+                if (linkMatch) announceFinalLink(linkMatch[1]);
                 else {
                   {
                     var anchorMatch = html.match(
                       /href=["'](https?:\/\/[^"']+)["'][^>]*>(?:[^<]{0,50})?(?:gốc|link|tiếp tục|continue)/i
                     );
                     if (anchorMatch && isFinalLink(anchorMatch[1])) {
-                      log('🏆 LINK GỐC: ' + anchorMatch[1], 'success');
+                      announceFinalLink(anchorMatch[1]);
                       return;
                     }
                     log('Hệ thống máy chủ từ chối yêu cầu. Vui lòng thử lại.', 'error');
@@ -476,16 +580,24 @@
           if (hasRecaptcha || hasHcaptcha) {
             log('Nhận diện lớp bảo mật hình ảnh.', 'warn');
             log('Vui lòng hoàn thành xác thực. Hệ thống đang chờ tín hiệu...', 'warn');
+            // BUGFIX: thêm giới hạn 5 phút, trước đây poll vô hạn
+            let captchaTicks = 0;
             let captchaTimer = setInterval(() => {
-              var redirectTarget = document.querySelector('[name="g-recaptcha-response"]')?.[
+              var recaptchaValue = document.querySelector('[name="g-recaptcha-response"]')?.[
                   'value'
                 ],
-                value4 = document.querySelector('[name="h-captcha-response"]')?.['value'];
-              (redirectTarget || value4) &&
-                (clearInterval(captchaTimer),
-                disableCaptchaButtons(),
-                log('Xác thực thành công! Đang thiết lập kết nối...', 'success'),
-                submitFormAndFindLink(targetForm));
+                hcaptchaValue = document.querySelector('[name="h-captcha-response"]')?.['value'];
+              if (recaptchaValue || hcaptchaValue) {
+                clearInterval(captchaTimer);
+                disableCaptchaButtons();
+                log('Xác thực thành công! Đang thiết lập kết nối...', 'success');
+                submitFormAndFindLink(targetForm);
+                return;
+              }
+              if (++captchaTicks > 300) {
+                clearInterval(captchaTimer);
+                log('Hết thời gian chờ xác thực hình ảnh (5 phút).', 'error');
+              }
             }, 1000);
           }
         }
@@ -803,10 +915,37 @@
         onerror: function () {
           campaignCache = [];
           done && done([]);
+        },
+        // BUGFIX: thiếu ontimeout -> luồng đứng im khi API treo
+        ontimeout: function () {
+          log('API campaign quá thời gian chờ, chuyển sang cache.', 'warn');
+          campaignCache = [];
+          done && done([]);
         }
       });
     }
     function resolveByCampaign(missionId2) {
+      // --- tự điền từ nhiệm vụ đã làm trước đó ---------------------------
+      var recalled = recallCampaign(missionId2, null);
+      if (recalled && recalled.data.domain) {
+        log(
+          'Nhiệm vụ này đã làm trước đó' +
+            (recalled.data.name ? ' [' + recalled.data.name + ']' : '') +
+            (recalled.exact ? '' : ' (khớp mờ: ' + recalled.key + ')') +
+            '. Tự điền domain: ' +
+            recalled.data.domain,
+          'success'
+        );
+        if (recalled.data.finalUrl)
+          log('Link gốc đã lưu: ' + recalled.data.finalUrl, 'info');
+        var recalledDomain = recalled.data.domain;
+        startFromJsconfig(
+          recalledDomain.startsWith('http') ? recalledDomain : 'https://' + recalledDomain,
+          'cache',
+          null
+        );
+        return;
+      }
       fetchCampaigns(function (campaigns) {
         if (!campaigns || !campaigns.length) {
           return resolveByGithubCache(missionId2);
@@ -834,7 +973,12 @@
                 .replace(/\/+$/, '')
                 .replace(/^\//, '')
                 .toLowerCase();
-              if (campaignSlug2.includes(wantedSlug) || wantedSlug.includes(campaignSlug2)) {
+              // BUGFIX: chặn slug rỗng/quá ngắn khớp bừa mọi nhiệm vụ
+              if (
+                campaignSlug2.length >= 4 &&
+                wantedSlug.length >= 4 &&
+                (campaignSlug2.includes(wantedSlug) || wantedSlug.includes(campaignSlug2))
+              ) {
                 campaign = campaigns[p];
                 break;
               }
@@ -849,6 +993,10 @@
             '✦\x20[' + (campaign.name || '?') + '] Đã nhận diện domain: ' + websiteUrl,
             'success'
           );
+          rememberCampaign(missionId2, {
+            name: campaign.name || '',
+            domain: websiteUrl.replace(/^https?:\/\//i, '')
+          });
           startFromJsconfig(
             websiteUrl.startsWith('http') ? websiteUrl : 'https://' + websiteUrl,
             'cache',
@@ -893,7 +1041,7 @@
             if (fileMeta.content) {
               var jsonText = base64ToUtf8(fileMeta.content),
                 cache = JSON.parse(jsonText);
-              if (cache.enabled && cache.redirects[missionId2]) {
+              if (cache.enabled && cache.redirects && cache.redirects[missionId2]) {
                 var cachedDomain = cache.redirects[missionId2];
                 log('Phát hiện bản lưu đám mây: ' + cachedDomain, 'success');
                 startFromJsconfig(
@@ -964,8 +1112,15 @@
                 if (putResponse.status === 200 || putResponse.status === 201)
                   log('Đã cập nhật an toàn vào cơ sở dữ liệu hệ thống.', 'success');
                 else {
-                  log('Cập nhật GitHub thất bại.', 'error');
+                  log('Cập nhật GitHub thất bại (HTTP ' + putResponse.status + ').', 'error');
                 }
+              },
+              // BUGFIX: PUT fail im lặng vì thiếu onerror/ontimeout
+              onerror: function () {
+                log('Không gửi được dữ liệu lên GitHub (lỗi mạng).', 'error');
+              },
+              ontimeout: function () {
+                log('Gửi dữ liệu lên GitHub quá thời gian chờ.', 'error');
               }
             });
           } catch (err) {
@@ -976,7 +1131,16 @@
     }
     function showManualDomainForm() {
       {
-        if (document.getElementById('manual-domain-input')) return;
+        // BUGFIX: form cũ bị ẩn vẫn tồn tại trong DOM -> hiện lại thay vì
+        // return sớm (trước đây là dead end, không thể nhập lần 2)
+        var oldForm = document.getElementById('manual-input-container');
+        if (oldForm) {
+          if (oldForm.style.display === 'none') {
+            oldForm.style.display = '';
+            oldForm.scrollIntoView({ block: 'nearest' });
+          }
+          return;
+        }
         log('Vui lòng cung cấp thông tin thủ công.', 'warn');
         let divEl2 = document.createElement('div');
         divEl2.id = 'manual-input-container';
@@ -989,6 +1153,23 @@
           '</span>';
         panelBody.appendChild(divEl2);
         panelBody.scrollTop = panelBody.scrollHeight;
+        // tự điền domain của nhiệm vụ giống đã làm trước đó
+        try {
+          var known = recallCampaign(missionId, null);
+          if (known && known.data.domain) {
+            var input = document.getElementById('manual-domain-input');
+            input.value = known.data.domain;
+            input.select();
+            log(
+              'Đã tự điền domain từ nhiệm vụ' +
+                (known.exact ? ' cùng mã' : ' tương tự (' + known.key + ')') +
+                ': ' +
+                known.data.domain +
+                ' — nhấn Enter để xác nhận.',
+              'success'
+            );
+          }
+        } catch (err) {}
         document.getElementById('manual-domain-input').addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter') document.getElementById('manual-domain-btn').click();
         });
@@ -1178,10 +1359,13 @@
           }
           log('Mã hóa hợp lệ. Cho phép tiến hành bước tiếp theo.', 'success');
           var domain = targetUrl.replace(/https?:\/\//i, '').replace(/\/$/, '');
+          // ghi nhớ domain vừa xác nhận sống, lần sau khỏi phải nhập lại
+          rememberCampaign(missionId, { domain: domain });
           if (source === 'manual') {
             saveDomainToGithub(missionId, domain);
             var el = document.getElementById('manual-input-container');
-            if (el) el.style.display = 'none';
+            // BUGFIX: xoá hẳn thay vì ẩn, tránh dead end ở lần gọi sau
+            if (el && el.parentNode) el.parentNode.removeChild(el);
           }
           checkJob(rdMatch[1], targetUrl, 0, source);
         },
@@ -2145,7 +2329,8 @@
                           }
                         }
                         if (startsWithDecoy) {
-                          body = body.slice(0, decoyBytes.length);
+                          // BUGFIX: bỏ 60 byte mồi ở đầu, giữ payload thật phía sau
+                          body = body.slice(decoyBytes.length);
                         }
                       }
                     }
@@ -2169,7 +2354,14 @@
                       );
                     if (job.status === 'finish')
                       return (
-                        (setStatus('hoàn tất', null), setRail(100), log('Mở khóa thành công!', 'success')),
+                        (setStatus('hoàn tất', null),
+                        setRail(100),
+                        rememberCampaign(missionId, {
+                          finalUrl: job.url,
+                          domain: originOf(targetUrl).replace(/^https?:\/\//i, ''),
+                          countRun: true
+                        }),
+                        log('Mở khóa thành công!', 'success')),
                         setTimeout(function () {
                           window.location.href =
                             originOf(targetUrl) +
@@ -2195,7 +2387,10 @@
                     }
                     var waitSeconds = job.wait || 0,
                       step = job.step || '?';
-                    log('Xác thực thành công! Bắt đầu chặng ' + step + '.', 'success');
+                    var cdEntry = log(
+                      'Xác thực thành công! Bắt đầu chặng ' + step + '.',
+                      'success'
+                    );
                     try {
                       postBinary(
                         'https://octolink.vip/check/countdown',
@@ -2220,8 +2415,9 @@
                           var total = Math.max(1, waitSeconds);
                           var frac = Math.max(0, Math.min(1, left / total));
                           var circ = 2 * Math.PI * 19;
-                          panelBody.lastChild.className = 'log-entry lv-system';
-                          panelBody.lastChild.innerHTML =
+                          if (!cdEntry || !cdEntry.isConnected) return;
+                          cdEntry.className = 'log-entry lv-system';
+                          cdEntry.innerHTML =
                             '<span class="oc-cd">' +
                             '<span class="oc-cd-ring">' +
                             '<svg viewBox="0 0 44 44" aria-hidden="true">' +
@@ -2357,7 +2553,8 @@
                   break;
                 }
               }
-              startsWithDecoy && (body = body.slice(0, decoyBytes.length));
+              // BUGFIX: bỏ 60 byte mồi ở đầu, giữ payload thật phía sau
+              startsWithDecoy && (body = body.slice(decoyBytes.length));
             }
           }
           try {
@@ -2380,7 +2577,14 @@
               }, 3000)
             );
           if (job.status === 'finish') {
-            (setStatus('hoàn tất', null), setRail(100), log('Mở khóa thành công!', 'success'));
+            (setStatus('hoàn tất', null),
+                        setRail(100),
+                        rememberCampaign(missionId, {
+                          finalUrl: job.url,
+                          domain: originOf(targetUrl).replace(/^https?:\/\//i, ''),
+                          countRun: true
+                        }),
+                        log('Mở khóa thành công!', 'success'));
             setTimeout(function () {
               window.location.href =
                 originOf(targetUrl) + '/?redirect_to_octo=' + encodeURIComponent(job.url);
