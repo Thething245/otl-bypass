@@ -1311,6 +1311,63 @@
     }
     function startFromJsconfig(targetUrl, source, unusedArg) {
       log('Đang kiểm tra giao thức định tuyến tại jsconfig...', 'system');
+      var _jsconfigDone = false;
+      function handleJsconfigResponse(responseText) {
+        var rdMatch = responseText.match(/var\s+rd\s*=\s*"([^"]+)"/);
+        if (!rdMatch) {
+          log('Không tìm thấy mã hóa trong jsconfig. Kích hoạt nhập thủ công.', 'warn');
+          showManualDomainForm();
+          return;
+        }
+        if (rdMatch[1] === DEMO_TOKEN) {
+          if (!demoRetried) {
+            demoRetried = true;
+            log('Server trả mã hóa demo - thử lại sau 5s...', 'warn');
+            setTimeout(function () {
+              startFromJsconfig(targetUrl, source, unusedArg);
+            }, 5000);
+          } else {
+            log('Vẫn nhận mã hóa demo. Session không hợp lệ - thử lại sau hoặc dùng trình duyệt sạch.', 'error');
+            showManualDomainForm();
+          }
+          return;
+        }
+        log('Mã hóa hợp lệ. Cho phép tiến hành bước tiếp theo.', 'success');
+        var domain = targetUrl.replace(/https?:\/\//i, '').replace(/\/$/, '');
+        rememberCampaign(missionId, { domain: domain });
+        if (source === 'manual') {
+          saveDomainToGithub(missionId, domain);
+          var el = document.getElementById('manual-input-container');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+        }
+        checkJob(rdMatch[1], targetUrl, 0, source);
+      }
+      function onJsconfigError(errMsg) {
+        if (_jsconfigDone) return;
+        _jsconfigDone = true;
+        log('Kết nối jsconfig thất bại: ' + errMsg + '. Chuyển sang nhập thủ công.', 'warn');
+        showManualDomainForm();
+      }
+      setTimeout(function () {
+        if (_jsconfigDone) return;
+        _jsconfigDone = true;
+        log('jsconfig timeout an toàn (10s) — thử fallback fetch...', 'warn');
+        fetch('https://octolink.vip/statics/jsconfig.js', {
+          method: 'GET',
+          cache: 'no-store'
+        })
+          .then(function (r) { return r.text(); })
+          .then(function (txt) {
+            if (txt && txt.length > 0) {
+              handleJsconfigResponse(txt);
+            } else {
+              onJsconfigError('fetch trả về rỗng');
+            }
+          })
+          .catch(function (e) {
+            onJsconfigError('fetch lỗi: ' + (e.message || e));
+          });
+      }, 10000);
       GM_xmlhttpRequest({
         method: 'GET',
         url: 'https://octolink.vip/statics/jsconfig.js',
@@ -1318,62 +1375,24 @@
         headers: {
           accept: '*/*',
           referer: targetUrl + (targetUrl.endsWith('/') ? '' : '/'),
-          'user-agent': USER_AGENT,
-          'sec-fetch-dest': 'script',
-          'sec-fetch-mode': 'no-cors',
-          'sec-fetch-site': 'cross-site'
+          'user-agent': USER_AGENT
         },
         onload: function (response) {
-          response.responseHeaders.split('\x0a').forEach((headerLine) => {
-            if (headerLine.toLowerCase().startsWith('set-cookie:'))
-              cookieHeader += headerLine.substring(11).split(';')[0].trim() + ';\x20';
-          });
-          var rdMatch = response.responseText.match(/var\s+rd\s*=\s*"([^"]+)"/);
-          if (!rdMatch) {
-            if (source === 'cache') {
-              log('Dữ liệu lưu trữ đã cũ. Kích hoạt chế độ nhập thủ công.', 'warn');
-              showManualDomainForm();
-            } else {
-              if (source === 'manual') {
-                log(
-                  'Thông tin cung cấp không thể thiết lập kết nối. Vui lòng kiểm tra lại.',
-                  'error'
-                );
-              }
-            }
-            return;
-          }
-          if (rdMatch[1] === DEMO_TOKEN) {
-            if (!demoRetried) {
-              demoRetried = true;
-              log('Server trả mã hóa demo - thử lại sau 5s...', 'warn');
-              setTimeout(function () {
-                startFromJsconfig(targetUrl, source, unusedArg);
-              }, 5000);
-            } else
-              log(
-                'Vẫn nhận mã hóa demo. Session không hợp lệ - thử lại sau hoặc dùng trình duyệt sạch.',
-                'error'
-              );
-            return;
-          }
-          log('Mã hóa hợp lệ. Cho phép tiến hành bước tiếp theo.', 'success');
-          var domain = targetUrl.replace(/https?:\/\//i, '').replace(/\/$/, '');
-          // ghi nhớ domain vừa xác nhận sống, lần sau khỏi phải nhập lại
-          rememberCampaign(missionId, { domain: domain });
-          if (source === 'manual') {
-            saveDomainToGithub(missionId, domain);
-            var el = document.getElementById('manual-input-container');
-            // BUGFIX: xoá hẳn thay vì ẩn, tránh dead end ở lần gọi sau
-            if (el && el.parentNode) el.parentNode.removeChild(el);
-          }
-          checkJob(rdMatch[1], targetUrl, 0, source);
+          if (_jsconfigDone) return;
+          _jsconfigDone = true;
+          try {
+            response.responseHeaders.split('\x0a').forEach((headerLine) => {
+              if (headerLine.toLowerCase().startsWith('set-cookie:'))
+                cookieHeader += headerLine.substring(11).split(';')[0].trim() + ';\x20';
+            });
+          } catch (e) {}
+          handleJsconfigResponse(response.responseText || '');
         },
         onerror: function () {
-          if (source === 'cache') showManualDomainForm();
+          onJsconfigError('lỗi mạng');
         },
         ontimeout: function () {
-          if (source === 'cache') showManualDomainForm();
+          onJsconfigError('hết thời gian chờ');
         }
       });
     }
@@ -1860,6 +1879,23 @@
     }
     var liveCoreSource = null;
     function bootLiveCore(done) {
+      var _liveCoreDone = false;
+      function finishLiveCore(cfg, src) {
+        if (_liveCoreDone) return;
+        _liveCoreDone = true;
+        runLiveCore(src, cfg, done);
+      }
+      function failLiveCore(msg) {
+        if (_liveCoreDone) return;
+        _liveCoreDone = true;
+        log(msg + ' — chuyển sang nhập thủ công.', 'error');
+        showManualDomainForm();
+        done && done(null);
+      }
+      setTimeout(function () {
+        if (_liveCoreDone) return;
+        failLiveCore('bootLiveCore timeout an toàn (10s)');
+      }, 10000);
       GM_xmlhttpRequest({
         method: 'GET',
         url: 'https://octolink.vip/statics/jsconfig.js',
@@ -1900,7 +1936,7 @@
             'system'
           );
           if (liveCoreSource) {
-            runLiveCore(liveCoreSource, config, done);
+            finishLiveCore(config, liveCoreSource);
             return;
           }
           GM_xmlhttpRequest({
@@ -1915,25 +1951,25 @@
             onload: function (coreResponse) {
               var coreSource = coreResponse.responseText || '';
               if (coreSource.length < 10000) {
-                log('Core live tải bất thường (' + coreSource.length + 'B).', 'error');
+                failLiveCore('Core live tải bất thường (' + coreSource.length + 'B)');
                 return;
               }
               liveCoreSource = coreSource;
-              runLiveCore(coreSource, config, done);
+              finishLiveCore(config, coreSource);
             },
             onerror: function () {
-              log('Không tải được core live.', 'error');
+              failLiveCore('Không tải được core live');
             },
             ontimeout: function () {
-              log('Hết thời gian tải core live.', 'error');
+              failLiveCore('Hết thời gian tải core live');
             }
           });
         },
         onerror: function () {
-          log('Không tải được jsconfig (live).', 'error');
+          failLiveCore('Không tải được jsconfig (live)');
         },
         ontimeout: function () {
-          log('Hết thời gian jsconfig (live).', 'error');
+          failLiveCore('Hết thời gian jsconfig (live)');
         }
       });
     }
@@ -2222,6 +2258,11 @@
         );
       apiOrigin = originOf(targetUrl);
       ensureCore(rdToken, function (ctx) {
+        if (!ctx || !ctx.w) {
+          log('Không dựng được core. Kích hoạt nhập thủ công.', 'error');
+          showManualDomainForm();
+          return;
+        }
         try {
           var w = ctx.w;
           GM_xmlhttpRequest({
