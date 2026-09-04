@@ -1,19 +1,31 @@
-// ==========================================================================
-// Deobfuscated userscript  (source: deobf.txt, javascript-obfuscator output)
-//
-// Purpose: automated link-shortener bypass for minuc.vn / linkhuongdan.online /
-// totreview.com / octolink.vip. It spoofs the referrer, hides
-// userscript traces from the page, solves the math/recaptcha/hold-captcha gate,
-// drives the octolink.vip /check/job + /check/continue flow through an embedded
-// "guard" core running inside a sandboxed iframe.
-//
-// Recovered by: string-array decoding, proxy-wrapper inlining, constant
-// folding, dictionary inlining, opaque-predicate + dead-branch elimination,
-// control-flow un-flattening, self-defense removal, and identifier renaming.
-//
-// NOTE - credentials have been stripped. If GitHub cache or moneytask API
-// is needed, supply your own tokens in GITHUB_TOKEN / Bearer header.
-// ==========================================================================
+// ==UserScript==
+// @name         Chodenocto-Bypass
+// @namespace    https://chodenocto.local
+// @version      2.0.0
+// @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
+// @author       Chodenocto
+// @match        *://minuc.vn/*
+// @match        *://linkhuongdan.online/*
+// @match        *://totreview.com/*
+// @match        *://octolink.vip/*
+// @match        *://*.minuc.vn/*
+// @match        *://*.linkhuongdan.online/*
+// @match        *://*.totreview.com/*
+// @match        *://*.octolink.vip/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addStyle
+// @grant        GM_setClipboard
+// @grant        GM_notification
+// @grant        GM_registerMenuCommand
+// @grant        GM_getResourceText
+// @grant        GM_addElement
+// @connect      *
+// @run-at       document-idle
+// @noframes     false
+// @license      MIT
+// ==/UserScript==
 
 (function () {
   'use strict';
@@ -232,6 +244,95 @@
       from_google: 'true'
     };
     var apiOrigin = '';
+    // ==================================================================
+    // safeRequest — GM_xmlhttpRequest wrapper + fetch() fallback + timeout
+    // Giải quyết: GM_xmlhttpRequest im lặng (không callback) ở một số env
+    // ==================================================================
+    function safeRequest(opts) {
+      var _fired = false;
+      var _t0 = Date.now();
+      var _url = opts.url || '?';
+      var _method = (opts.method || 'GET').toUpperCase();
+      var _origLoad = opts.onload;
+      var _origErr = opts.onerror;
+      var _origTmo = opts.ontimeout;
+      var _timeout = opts.timeout || 30000;
+      function _done(fn, arg) {
+        if (_fired) return;
+        _fired = true;
+        try { fn && fn(arg); } catch (e) { console.error('[safeRequest] callback err:', e); }
+      }
+      opts.onload = function (r) { _done(_origLoad, r); };
+      opts.onerror = function (e) { _done(_origErr, e); };
+      opts.ontimeout = function () { _done(_origTmo); };
+      // safety net: nếu GM_xmlhttpRequest không fire callback trong 1.5x timeout
+      var _safety = setTimeout(function () {
+        if (_fired) return;
+        console.warn('[safeRequest] GM_xmlhttpRequest SILENT ' + (Date.now()-_t0) + 'ms → fetch fallback: ' + _url);
+        _fetchFallback();
+      }, Math.max(_timeout * 1.5, 12000));
+      function _fetchFallback() {
+        if (_fired) return;
+        var _fOpts = { method: _method, headers: {} };
+        if (opts.headers) {
+          var hk = Object.keys(opts.headers);
+          for (var i = 0; i < hk.length; i++) {
+            var k = hk[i].toLowerCase();
+            // fetch() không set được mấy header này, skip
+            if (k === 'x-requested-with' || k === 'sec-fetch-dest' || k === 'sec-fetch-mode' || k === 'sec-fetch-site') continue;
+            _fOpts.headers[hk[i]] = opts.headers[hk[i]];
+          }
+        }
+        if (opts.data) _fOpts.body = opts.data;
+        if (opts.responseType === 'arraybuffer') _fOpts.responseType = 'arraybuffer';
+        fetch(_url, _fOpts)
+          .then(function (resp) {
+            if (_fired) return;
+            _fired = true;
+            clearTimeout(_safety);
+            var ct = resp.headers.get('content-type') || '';
+            if (ct.indexOf('json') >= 0 || ct.indexOf('text') >= 0 || ct.indexOf('javascript') >= 0 || ct.indexOf('html') >= 0) {
+              resp.text().then(function (txt) {
+                _done(_origLoad, {
+                  status: resp.status,
+                  statusText: resp.statusText,
+                  responseText: txt,
+                  responseHeaders: Array.from(resp.headers.entries()).map(function (h) { return h[0] + ': ' + h[1]; }).join('\n')
+                });
+              });
+            } else {
+              resp.arrayBuffer().then(function (ab) {
+                _done(_origLoad, {
+                  status: resp.status,
+                  statusText: resp.statusText,
+                  response: ab,
+                  responseText: '',
+                  responseHeaders: Array.from(resp.headers.entries()).map(function (h) { return h[0] + ': ' + h[1]; }).join('\n')
+                });
+              });
+            }
+          })
+          ['catch'](function (err) {
+            if (_fired) return;
+            _fired = true;
+            clearTimeout(_safety);
+            console.error('[safeRequest] fetch ALSO FAILED: ' + _url + ' — ' + (err.message || err));
+            _done(_origErr, { statusText: 'fetch_failed: ' + (err.message || err) });
+          });
+      }
+      // try GM_xmlhttpRequest first
+      if (typeof GM_xmlhttpRequest === 'function') {
+        try {
+          GM_xmlhttpRequest(opts);
+        } catch (e) {
+          console.warn('[safeRequest] GM_xmlhttpRequest threw: ' + e.message + ' → fetch fallback');
+          _fetchFallback();
+        }
+      } else {
+        console.warn('[safeRequest] GM_xmlhttpRequest NOT AVAILABLE → fetch fallback: ' + _url);
+        _fetchFallback();
+      }
+    }
     function collectCookies(rawHeaders) {
       if (!rawHeaders) return;
       String(rawHeaders)
@@ -564,7 +665,7 @@
     // ---- startup network diagnostic ------------------------------------
     if (typeof GM_xmlhttpRequest === 'function') {
       var _diagT0 = Date.now();
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'HEAD',
         url: 'https://octolink.vip/',
         timeout: 8000,
@@ -589,7 +690,7 @@
         }
       });
       var _diagGhT0 = Date.now();
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'HEAD',
         url: 'https://api.github.com/',
         timeout: 8000,
@@ -627,12 +728,13 @@
       done: false
     };
     function runFinishPageSolver(submitForm) {
-      if (holdCaptcha.inited && holdCaptcha.solverTimer) {
+      if (holdCaptcha.inited && holdCaptcha.solverTimer && !holdCaptcha.done) {
         log('Hold captcha đang chạy sẵn.', 'info');
         return;
       }
       holdCaptcha.inited = true;
       holdCaptcha.done = false;
+      holdCaptcha.solverTimer = null;
       log('Đang khởi động bộ giải giữ-chuột...', 'system');
       startHoldCaptchaSolverWithForm(submitForm);
       // poll giá trị đã điền -> khi xong, tự bấm nút lấy link gốc
@@ -762,24 +864,6 @@
         }
         return null;
       }
-      function dispatchEvents(target, x, y) {
-        var base = {
-          clientX: x,
-          clientY: y,
-          pageX: x + window.scrollX,
-          pageY: y + window.scrollY,
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          pointerId: 1,
-          pointerType: 'mouse',
-          isPrimary: true
-        };
-        try {
-          target.dispatchEvent(new PointerEvent('pointermove', base));
-          target.dispatchEvent(new MouseEvent('mousemove', base));
-        } catch (e) {}
-      }
       function getExactCanvasRect(canvas) {
         var r = canvas.getBoundingClientRect();
         if (r && r.width > 0) return r;
@@ -792,6 +876,55 @@
         }
         return null;
       }
+      function makePointerOpts(x, y) {
+        return {
+          clientX: x,
+          clientY: y,
+          pageX: x + window.scrollX,
+          pageY: y + window.scrollY,
+          screenX: x,
+          screenY: y,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          view: window,
+          detail: 1,
+          button: 0,
+          buttons: 1,
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true
+        };
+      }
+      function dispatchMove(target, x, y) {
+        var opts = makePointerOpts(x, y);
+        try {
+          target.dispatchEvent(new PointerEvent('pointermove', opts));
+          target.dispatchEvent(new MouseEvent('mousemove', opts));
+        } catch (e) {}
+      }
+      function dispatchDown(target, x, y) {
+        var opts = makePointerOpts(x, y);
+        try {
+          target.dispatchEvent(new PointerEvent('pointerdown', opts));
+          target.dispatchEvent(new MouseEvent('mousedown', opts));
+        } catch (e) {}
+      }
+      function dispatchUp(target, x, y) {
+        var opts = makePointerOpts(x, y);
+        opts.buttons = 0;
+        try {
+          target.dispatchEvent(new PointerEvent('pointerup', opts));
+          target.dispatchEvent(new MouseEvent('mouseup', opts));
+          target.dispatchEvent(new MouseEvent('click', opts));
+        } catch (e) {}
+      }
+      function isResponseFilled() {
+        var el =
+          document.getElementById('hold_captcha_response') ||
+          document.querySelector('input[name="hold_captcha_response"]');
+        return el && el.value && el.value.length > 5;
+      }
       function runWithCanvas(canvas) {
         if (!canvas || solverState.running) return;
         solverState.running = true;
@@ -801,65 +934,26 @@
         } catch (e) {
           return;
         }
-        // kích hoạt widget bằng click/hover ở giữa
         var rect = getExactCanvasRect(canvas);
-        if (rect && rect.width > 0) {
-          var ix = rect.left + rect.width / 2;
-          var iy = rect.top + rect.height / 2;
-          var opts = {
-            clientX: ix,
-            clientY: iy,
-            pageX: ix + window.scrollX,
-            pageY: iy + window.scrollY,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            pointerId: 1,
-            pointerType: 'mouse',
-            isPrimary: true
-          };
-          try {
-            canvas.dispatchEvent(new PointerEvent('pointerenter', opts));
-            canvas.dispatchEvent(new MouseEvent('mouseenter', opts));
-            dispatchEvents(canvas, ix, iy);
-            canvas.dispatchEvent(new MouseEvent('click', opts));
-          } catch (e) {}
+        if (!rect || rect.width === 0) {
+          log('Không xác định được vị trí canvas.', 'error');
+          solverState.running = false;
+          return;
         }
-        var started = Date.now();
-        solverState.interval = setInterval(function () {
-          if (solverState.finished) {
-            clearInterval(solverState.interval);
-            return;
-          }
-          var resInput =
-            document.getElementById('hold_captcha_response') ||
-            document.querySelector('input[name="hold_captcha_response"]');
-          if (resInput && resInput.value && resInput.value.length > 5) {
-            solverState.finished = true;
-            clearInterval(solverState.interval);
-            if (typeof window.__ocHoldSolved === 'function') window.__ocHoldSolved();
-            return;
-          }
-          if (Date.now() - started > 60000) {
-            solverState.finished = true;
-            clearInterval(solverState.interval);
-            log('Hold captcha quá lâu, tạm dừng.', 'warn');
-            return;
-          }
-          rect = getExactCanvasRect(canvas);
-          if (!rect || rect.width === 0) return;
-          var w = canvas.width || 504;
-          var h = canvas.height || 430;
-          var scaleX = rect.width / w;
-          var scaleY = rect.height / h;
-          var startY = Math.floor(h * 0.28);
-          var endY = Math.floor(h * 0.95);
-          var scanH = endY - startY;
+        var w = canvas.width || 504;
+        var h = canvas.height || 430;
+        var scaleX = rect.width / w;
+        var scaleY = rect.height / h;
+        log('Canvas đã tìm thấy (' + w + 'x' + h + '). Bắt đầu giải hold captcha...', 'system');
+        function findDot() {
+          var scanStartY = Math.floor(h * 0.15);
+          var scanEndY = Math.floor(h * 0.95);
+          var scanH = scanEndY - scanStartY;
           var imgData;
           try {
-            imgData = ctx.getImageData(0, startY, w, scanH);
+            imgData = ctx.getImageData(0, scanStartY, w, scanH);
           } catch (e) {
-            return;
+            return null;
           }
           var data = imgData.data;
           var sumX = 0,
@@ -875,23 +969,80 @@
                 a = data[idx + 3];
               if (a > 180 && r < 65 && g < 65 && b < 65) rowPixels.push(x);
             }
-            if (rowPixels.length >= 5 && rowPixels.length <= 26) {
+            if (rowPixels.length >= 3 && rowPixels.length <= 30) {
               for (var k = 0; k < rowPixels.length; k++) {
                 sumX += rowPixels[k];
-                sumY += y + startY;
+                sumY += y + scanStartY;
                 count++;
               }
             }
           }
-          if (count > 8) {
-            var dotX = sumX / count;
-            var dotY = sumY / count;
-            var tx = rect.left + dotX * scaleX;
-            var ty = rect.top + dotY * scaleY;
-            dispatchEvents(canvas, tx, ty);
-            dispatchEvents(document, tx, ty);
+          if (count > 5) {
+            return { cx: sumX / count, cy: sumY / count };
           }
-        }, 20);
+          return null;
+        }
+        function step(attempt) {
+          if (solverState.finished || isResponseFilled()) {
+            solverState.finished = true;
+            if (isResponseFilled()) {
+              log('Hold captcha solved!', 'success');
+              if (typeof window.__ocHoldSolved === 'function') window.__ocHoldSolved();
+            }
+            return;
+          }
+          if (Date.now() - solverState.startTime > 60000) {
+            solverState.finished = true;
+            log('Hold captcha quá 60 giây, tạm dừng.', 'warn');
+            return;
+          }
+          var dot = findDot();
+          if (!dot) {
+            log('Chưa tìm thấy dấu chấm, thử lại...', 'warn');
+            setTimeout(function () { step(attempt + 1); }, 500);
+            return;
+          }
+          var dotScreenX = rect.left + dot.cx * scaleX;
+          var dotScreenY = rect.top + dot.cy * scaleY;
+          log('Tìm thấy dấu chấm tại (' + Math.round(dot.cx) + ',' + Math.round(dot.cy) + '). Bấm giữ...', 'system');
+          // BƯỚC 1: Move vào dot
+          dispatchMove(canvas, dotScreenX, dotScreenY);
+          dispatchMove(document, dotScreenX, dotScreenY);
+          setTimeout(function () {
+            // BƯỚC 2: Giữ chuột (pointerdown + mousedown)
+            dispatchDown(canvas, dotScreenX, dotScreenY);
+            dispatchDown(document, dotScreenX, dotScreenY);
+            log('Đang giữ chuột... (3 giây)', 'system');
+            var holdStart = Date.now();
+            var jitterInterval = setInterval(function () {
+              if (isResponseFilled() || solverState.finished || Date.now() - holdStart > 4000) {
+                clearInterval(jitterInterval);
+                // BƯỚC 3: Thả chuột
+                dispatchUp(canvas, dotScreenX, dotScreenY);
+                dispatchUp(document, dotScreenX, dotScreenY);
+                setTimeout(function () {
+                  if (isResponseFilled()) {
+                    solverState.finished = true;
+                    log('Hold captcha solved!', 'success');
+                    if (typeof window.__ocHoldSolved === 'function') window.__ocHoldSolved();
+                    return;
+                  }
+                  // Chưa solved → thử lại với dot mới (dot có thể di chuyển)
+                  log('Chưa nhận diện solved, thử lại...', 'warn');
+                  setTimeout(function () { step(attempt + 1); }, 800);
+                }, 500);
+                return;
+              }
+              // jitter nhẹ để giả lập người thật
+              var jx = dotScreenX + (Math.random() - 0.5) * 2;
+              var jy = dotScreenY + (Math.random() - 0.5) * 2;
+              dispatchMove(canvas, jx, jy);
+              dispatchMove(document, jx, jy);
+            }, 80);
+          }, 150);
+        }
+        solverState.startTime = Date.now();
+        step(0);
       }
       // poll đến khi có canvas
       var attempts = 0;
@@ -1046,7 +1197,11 @@
         } else {
           if (hasHoldCaptcha) {
             log('Nhận diện lớp bảo mật giữ chuột (hold captcha). Tự động xử lý...', 'warn');
-            runHoldCaptchaSolver(targetForm);
+            holdCaptcha.inited = false;
+            holdCaptcha.done = false;
+            runHoldCaptchaSolver(function () {
+              submitFormAndFindLink(targetForm);
+            });
           } else {
             if (hasRecaptcha || hasHcaptcha) {
               log('Nhận diện lớp bảo mật hình ảnh.', 'warn');
@@ -1301,7 +1456,7 @@
               pairs.push(
                 encodeURIComponent(fieldName) + '=' + encodeURIComponent(fields[fieldName])
               );
-            GM_xmlhttpRequest({
+            safeRequest({
               method: 'POST',
               url: actionUrl,
               timeout: 0x4e20,
@@ -1481,7 +1636,7 @@
         );
       }
       log('Đang kết nối API thời gian thực để lấy dữ liệu đám mây...', 'system');
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'GET',
         url:
           'https://api.github.com/repos/' +
@@ -1541,7 +1696,7 @@
       if (!GITHUB_TOKEN) return;
       log('Đang đồng bộ hóa dữ liệu lên hệ thống lưu trữ...', 'system');
       const apiUrl = 'https://api.github.com/repos/' + GITHUB_REPO + '/contents/' + GITHUB_FILE;
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'GET',
         url: apiUrl,
         headers: {
@@ -1565,7 +1720,7 @@
                 content: encoded,
                 sha: fileMeta.sha
               };
-            GM_xmlhttpRequest({
+            safeRequest({
               method: 'PUT',
               url: apiUrl,
               headers: {
@@ -1646,7 +1801,7 @@
           log('Đang kiểm tra định tuyến cho: ' + domain, 'system');
           demoRetried = false;
           log('Truy cập ẩn ' + domain + ' để xác định domain thật...', 'system');
-          GM_xmlhttpRequest({
+          safeRequest({
             method: 'GET',
             url: 'https://' + domain,
             timeout: 0x7530,
@@ -1683,7 +1838,7 @@
         return;
       }
       log('Truy cập ẩn ' + domain + ' để lấy phiên...', 'system');
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'GET',
         url: 'https://' + domain,
         timeout: 0xea60,
@@ -1735,7 +1890,7 @@
         return;
       }
       log('Mở cổng thiết bị ẩn cho: ' + alias + '...', 'system');
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'POST',
         url: 'https://octolink.vip/check/device',
         data: 'alias=' + encodeURIComponent(alias) + '&dv=',
@@ -1833,7 +1988,7 @@
             onJsconfigError('fetch lỗi: ' + (e.message || e));
           });
       }, 10000);
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'GET',
         url: 'https://octolink.vip/statics/jsconfig.js',
         timeout: 0xea60,
@@ -1864,7 +2019,7 @@
     function octolinkCheckDevice(alias) {
       if (!alias) return showManualDomainForm();
       log('Đang gửi yêu cầu mở cổng tới Octolink...', 'system');
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'POST',
         url: 'https://octolink.vip/check/device',
         data: 'alias=' + encodeURIComponent(alias) + '&dv=',
@@ -2016,7 +2171,7 @@
         };
         request.onerror = onError;
         request.ontimeout = onTimeout;
-        GM_xmlhttpRequest(request);
+        safeRequest(request);
       }
       attempt('ab');
     }
@@ -2241,7 +2396,7 @@
           done && done();
           return;
         }
-        GM_xmlhttpRequest({
+        safeRequest({
           method: 'GET',
           url: 'https://octolink.vip/js/rawfp.js?v=' + Date.now(),
           timeout: 0xea60,
@@ -2361,7 +2516,7 @@
         if (_liveCoreDone) return;
         failLiveCore('bootLiveCore timeout an toàn (10s)');
       }, 10000);
-      GM_xmlhttpRequest({
+      safeRequest({
         method: 'GET',
         url: 'https://octolink.vip/statics/jsconfig.js',
         timeout: 0xea60,
@@ -2404,7 +2559,7 @@
             finishLiveCore(config, liveCoreSource);
             return;
           }
-          GM_xmlhttpRequest({
+          safeRequest({
             method: 'GET',
             url: 'https://octolink.vip/js/shortearn.live.js?v=' + Date.now(),
             timeout: 0xea60,
@@ -2730,7 +2885,7 @@
         }
         try {
           var w = ctx.w;
-          GM_xmlhttpRequest({
+          safeRequest({
             method: 'GET',
             url: 'https://octolink.vip/statics/jsconfig.js',
             timeout: 0xea60,
