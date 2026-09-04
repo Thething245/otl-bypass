@@ -2,27 +2,114 @@
 // Deobfuscated userscript  (source: deobf.txt, javascript-obfuscator output)
 //
 // Purpose: automated link-shortener bypass for minuc.vn / linkhuongdan.online /
-// totreview.com / octolink.vip / moneytask.top. It spoofs the referrer, hides
-// userscript traces from the page, solves the math/recaptcha gate, drives the
-// octolink.vip /check/job + /check/continue flow through an embedded "guard"
-// core running inside a sandboxed iframe, and caches resolved domains in a
-// GitHub repo.
+// totreview.com / octolink.vip. It spoofs the referrer, hides
+// userscript traces from the page, solves the math/recaptcha/hold-captcha gate,
+// drives the octolink.vip /check/job + /check/continue flow through an embedded
+// "guard" core running inside a sandboxed iframe.
 //
 // Recovered by: string-array decoding, proxy-wrapper inlining, constant
 // folding, dictionary inlining, opaque-predicate + dead-branch elimination,
 // control-flow un-flattening, self-defense removal, and identifier renaming.
 //
-// NOTE - two live credentials are hardcoded below (GITHUB_TOKEN and the
-// moneytask.top Bearer JWT). They were present in the original file. Treat them
-// as compromised and rotate them.
-//
-// NOTE - the original obfuscated file already contained 5 references to
-// undeclared variables (_0v, _0h, _0bytes, _0a, _0srcJ). They were dead-on-
-// arrival bugs; each has been repaired to the variable it clearly meant.
+// NOTE - credentials have been stripped. If GitHub cache or moneytask API
+// is needed, supply your own tokens in GITHUB_TOKEN / Bearer header.
 // ==========================================================================
 
 (function () {
   'use strict';
+
+  // ==================================================================
+  // NETWORK DIAGNOSTICS — auto-log every GM_xmlhttpRequest call
+  // with URL, method, status, elapsed, response snippet, headers
+  // ==================================================================
+  (function () {
+    if (typeof GM_xmlhttpRequest !== 'function') return;
+    var _orig = GM_xmlhttpRequest;
+    var _reqCounter = 0;
+    GM_xmlhttpRequest = function (opts) {
+      var id = ++_reqCounter;
+      var url = opts.url || '?';
+      var method = (opts.method || 'GET').toUpperCase();
+      var t0 = Date.now();
+      var shortUrl = url.length > 80 ? url.substring(0, 77) + '...' : url;
+      console.log('[NET#' + id + '] → ' + method + ' ' + shortUrl);
+      if (opts.headers) {
+        try {
+          var hdrKeys = Object.keys(opts.headers);
+          var safeH = hdrKeys.filter(function (k) {
+            return k.toLowerCase().indexOf('authorization') < 0 && k.toLowerCase().indexOf('cookie') < 0;
+          }).map(function (k) { return k + ': ' + String(opts.headers[k]).substring(0, 60); });
+          if (safeH.length) console.log('[NET#' + id + ']   headers: ' + safeH.join(' | '));
+        } catch (e) {}
+      }
+      var origOnload = opts.onload;
+      var origOnerror = opts.onerror;
+      var origOntimeout = opts.ontimeout;
+      opts.onload = function (resp) {
+        var elapsed = Date.now() - t0;
+        var status = resp.status || 0;
+        var bodyLen = (resp.responseText || '').length;
+        var hdrs = '';
+        try {
+          hdrs = (resp.responseHeaders || '').split('\n').filter(function (l) {
+            return l.toLowerCase().indexOf('content-type') === 0 ||
+                   l.toLowerCase().indexOf('set-cookie') === 0;
+          }).map(function (l) { return l.trim(); }).join('; ');
+        } catch (e) {}
+        var lvl = status >= 400 ? 'warn' : 'system';
+        var msg = '[NET#' + id + '] ← ' + status + ' ' + elapsed + 'ms ' + bodyLen + 'B';
+        if (hdrs) msg += ' [' + hdrs + ']';
+        if (status >= 400) {
+          msg += '\n  Body(200): ' + (resp.responseText || '').substring(0, 200);
+          console.warn(msg);
+        } else {
+          console.log(msg);
+        }
+        if (origOnload) origOnload(resp);
+      };
+      opts.onerror = function (e) {
+        var elapsed = Date.now() - t0;
+        var errMsg = (e && (e.statusText || e.message || e.error)) || 'unknown';
+        var msg = '[NET#' + id + '] ✕ ONERROR ' + elapsed + 'ms\n' +
+                  '  URL: ' + shortUrl + '\n' +
+                  '  Error: ' + errMsg + '\n' +
+                  '  CORS-blocked: response body/status KHÔNG available từ browser\n' +
+                  '  UA: ' + (navigator.userAgent || '').substring(0, 100) + '\n' +
+                  '  Hint: check DNS, firewall, VPN, hoặc octolink.vip bị chặn ở ISP';
+        console.error(msg);
+        if (origOnerror) origOnerror(e);
+      };
+      opts.ontimeout = function () {
+        var elapsed = Date.now() - t0;
+        var timeoutSec = ((opts.timeout || 0) / 1000);
+        var msg = '[NET#' + id + '] ✕ TIMEOUT ' + elapsed + 'ms (limit ' + timeoutSec + 's)\n' +
+                  '  URL: ' + shortUrl + '\n' +
+                  '  Hint: server không phản hồi — thử lại sau hoặc đổi mạng';
+        console.error(msg);
+        if (origOntimeout) origOntimeout();
+      };
+      return _orig(opts);
+    };
+    // also patch fetch for fallback path
+    if (typeof window.__origFetch === 'undefined') {
+      window.__origFetch = window.fetch;
+      window.fetch = function () {
+        var args = arguments;
+        var url2 = (typeof args[0] === 'string' ? args[0] : args[0] && args[0].url) || '?';
+        var t0f = Date.now();
+        console.log('[FETCH] → ' + url2);
+        return window.__origFetch.apply(window, args).then(function (resp) {
+          var el = Date.now() - t0f;
+          console.log('[FETCH] ← ' + resp.status + ' ' + el + 'ms ' + url2);
+          return resp;
+        }, function (err) {
+          var el = Date.now() - t0f;
+          console.error('[FETCH] ✕ ' + el + 'ms ' + url2 + '\n  ' + (err.message || err));
+          throw err;
+        });
+      };
+    }
+  })();
 
   typeof window.TextEncoder === 'undefined' &&
     (window.TextEncoder = function () {
@@ -126,9 +213,9 @@
       window.location.href = MISSION_FALLBACK_URL;
       return;
     }
-    const GITHUB_TOKEN = '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',
-      GITHUB_REPO = 'nasanoper/my-octo-cache',
-      GITHUB_FILE = 'link.json',
+    const GITHUB_TOKEN = '',
+      GITHUB_REPO = '',
+      GITHUB_FILE = '',
       pageUrl = window.location.href,
       queryParams = new URLSearchParams(window.location.search),
       hostname = window.location.hostname,
@@ -198,7 +285,7 @@
     if (!isGuideHost && !hasCsrfForm && !originalLinkMatch && !hostname.includes('octolink.vip'))
       return;
     let styleEl = document.createElement('style');
-    styleEl.textContent = "\n:root{\n  --oc-bg:#08060f; --oc-bg2:#0d0a1a;\n  --oc-accent:#a855f7; --oc-accent2:#22d3ee; --oc-accent3:#f472b6;\n  --oc-text:#e9e6f5; --oc-dim:#9b93b8;\n  --oc-ok:#34d399; --oc-warn:#fbbf24; --oc-err:#fb7185; --oc-sys:#60a5fa;\n}\n@keyframes oc-in{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}\n@keyframes oc-pop{0%{opacity:0;transform:translateY(10px) scale(.96)}60%{transform:translateY(-2px) scale(1.01)}100%{opacity:1;transform:none}}\n@keyframes oc-spin{to{transform:rotate(360deg)}}\n@keyframes oc-aurora{0%{transform:translate(-12%,-8%) rotate(0deg)}50%{transform:translate(10%,8%) rotate(180deg)}100%{transform:translate(-12%,-8%) rotate(360deg)}}\n@keyframes oc-sheen{0%{background-position:-200% 0}100%{background-position:200% 0}}\n@keyframes oc-breathe{0%,100%{opacity:.55}50%{opacity:1}}\n@keyframes oc-float{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-9px) rotate(3deg)}}\n@keyframes oc-ring{0%{box-shadow:0 0 0 0 rgba(168,85,247,.55)}100%{box-shadow:0 0 0 14px rgba(168,85,247,0)}}\n@keyframes oc-bar{0%{background-position:0 0}100%{background-position:28px 0}}\n\n.lux-panel{\n  position:fixed; bottom:26px; right:26px; width:412px; height:396px;\n  z-index:2147483647; display:flex; flex-direction:column; overflow:visible;\n  color:var(--oc-text);\n  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;\n  font-size:13.5px; border-radius:20px;\n  background:\n    linear-gradient(180deg,rgba(20,16,34,.92),rgba(8,6,15,.96));\n  border:1px solid rgba(168,85,247,.22);\n  box-shadow:\n    0 24px 60px -12px rgba(0,0,0,.85),\n    0 0 0 1px rgba(255,255,255,.04) inset,\n    0 1px 0 rgba(255,255,255,.07) inset;\n  backdrop-filter:blur(22px) saturate(150%);\n  -webkit-backdrop-filter:blur(22px) saturate(150%);\n  animation:oc-pop .45s cubic-bezier(.2,.9,.25,1) both;\n  transition:height .34s cubic-bezier(.4,0,.2,1), width .34s cubic-bezier(.4,0,.2,1), box-shadow .3s;\n  will-change:height;\n}\n.lux-panel::before{ /* animated aurora wash */\n  content:''; position:absolute; inset:-40%; border-radius:50%; pointer-events:none;\n  background:\n    radial-gradient(38% 38% at 30% 30%,rgba(168,85,247,.30),transparent 70%),\n    radial-gradient(34% 34% at 70% 40%,rgba(34,211,238,.20),transparent 70%),\n    radial-gradient(30% 30% at 50% 75%,rgba(244,114,182,.18),transparent 70%);\n  filter:blur(26px); opacity:.85; animation:oc-aurora 22s linear infinite; z-index:0;\n}\n.lux-panel::after{ /* gradient hairline border */\n  content:''; position:absolute; inset:0; border-radius:20px; padding:1px; pointer-events:none;\n  background:linear-gradient(135deg,rgba(168,85,247,.75),rgba(34,211,238,.35) 40%,transparent 65%,rgba(244,114,182,.45));\n  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);\n  -webkit-mask-composite:xor; mask-composite:exclude; z-index:2;\n}\n.lux-panel.oc-collapsed{height:58px!important;width:300px!important}\n.lux-panel.oc-drag{transition:none; box-shadow:0 30px 80px -10px rgba(0,0,0,.95)}\n\n.arh-sticker{\n  position:absolute; top:-26px; left:-16px; z-index:5;\n  animation:oc-float 5s ease-in-out infinite;\n  filter:drop-shadow(0 8px 16px rgba(168,85,247,.5));\n}\n\n.lux-header{\n  position:relative; z-index:3; flex:0 0 auto;\n  display:flex; align-items:center; justify-content:space-between; gap:10px;\n  padding:13px 14px 13px 16px; border-radius:20px 20px 0 0;\n  background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.015));\n  border-bottom:1px solid rgba(255,255,255,.07);\n  cursor:grab; user-select:none;\n}\n.lux-header:active{cursor:grabbing}\n.oc-brand{display:flex;align-items:center;gap:10px;min-width:0}\n.oc-dot{\n  width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:var(--oc-ok);\n  box-shadow:0 0 10px var(--oc-ok); animation:oc-ring 2.2s ease-out infinite;\n}\n.oc-dot.oc-busy{background:var(--oc-accent2);box-shadow:0 0 10px var(--oc-accent2)}\n.oc-dot.oc-bad{background:var(--oc-err);box-shadow:0 0 10px var(--oc-err)}\n.oc-title{\n  font-weight:700; font-size:13px; letter-spacing:.10em; white-space:nowrap;\n  background:linear-gradient(92deg,#fff,#d8b4fe 35%,#67e8f9 65%,#fff);\n  background-size:200% auto; -webkit-background-clip:text; background-clip:text;\n  -webkit-text-fill-color:transparent; animation:oc-sheen 6s linear infinite;\n}\n.oc-sub{font-size:10px;color:var(--oc-dim);letter-spacing:.06em;margin-top:1px}\n.oc-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}\n.lux-btn{\n  -webkit-appearance:none; appearance:none; width:26px; height:26px; padding:0;\n  display:grid; place-items:center; border-radius:8px; cursor:pointer;\n  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08);\n  color:var(--oc-dim); font-size:14px; line-height:1; font-weight:700;\n  transition:all .18s ease;\n}\n.lux-btn:hover{background:rgba(168,85,247,.20);border-color:rgba(168,85,247,.5);color:#fff;transform:translateY(-1px)}\n.lux-btn:active{transform:translateY(0) scale(.94)}\n\n/* thin progress rail under the header */\n.oc-rail{position:relative;z-index:3;height:2px;flex:0 0 auto;background:rgba(255,255,255,.06);overflow:hidden}\n.oc-rail>i{\n  display:block;height:100%;width:0%;border-radius:2px;\n  background:linear-gradient(90deg,var(--oc-accent),var(--oc-accent2));\n  box-shadow:0 0 8px rgba(168,85,247,.7); transition:width .5s linear;\n}\n\n.lux-body{\n  position:relative; z-index:3; flex:1 1 auto; min-height:0;\n  padding:12px 12px 14px; overflow-y:auto; overflow-x:hidden;\n  line-height:1.55; scrollbar-width:thin; scrollbar-color:rgba(168,85,247,.45) transparent;\n  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 12px,#000 calc(100% - 10px),transparent 100%);\n          mask-image:linear-gradient(180deg,transparent 0,#000 12px,#000 calc(100% - 10px),transparent 100%);\n}\n.lux-body::-webkit-scrollbar{width:7px}\n.lux-body::-webkit-scrollbar-track{background:transparent}\n.lux-body::-webkit-scrollbar-thumb{\n  background:linear-gradient(180deg,rgba(168,85,247,.65),rgba(34,211,238,.45));\n  border-radius:99px; border:2px solid transparent; background-clip:content-box;\n}\n.lux-body::-webkit-scrollbar-thumb:hover{background:rgba(168,85,247,.9);background-clip:content-box}\n\n.log-entry{\n  position:relative; display:flex; align-items:flex-start; gap:9px;\n  margin-bottom:7px; padding:9px 11px 9px 12px; border-radius:11px;\n  background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.022));\n  border:1px solid rgba(255,255,255,.055);\n  box-shadow:0 1px 0 rgba(255,255,255,.04) inset;\n  animation:oc-in .3s cubic-bezier(.2,.9,.25,1) both;\n  transition:transform .18s ease, background .18s ease, border-color .18s ease;\n  overflow:hidden;\n}\n.log-entry:hover{transform:translateX(2px);background:rgba(255,255,255,.075);border-color:rgba(255,255,255,.11)}\n.log-entry::before{\n  content:''; position:absolute; left:0; top:0; bottom:0; width:3px; border-radius:3px 0 0 3px;\n  background:var(--oc-accent); opacity:.95;\n}\n.log-entry.lv-success::before{background:var(--oc-ok)}\n.log-entry.lv-warn::before{background:var(--oc-warn)}\n.log-entry.lv-error::before{background:var(--oc-err)}\n.log-entry.lv-system::before{background:var(--oc-sys)}\n.log-entry.lv-error{background:linear-gradient(180deg,rgba(251,113,133,.12),rgba(251,113,133,.04));border-color:rgba(251,113,133,.24)}\n.log-entry.lv-success{background:linear-gradient(180deg,rgba(52,211,153,.11),rgba(52,211,153,.035));border-color:rgba(52,211,153,.22)}\n.log-icon{flex:0 0 auto;font-size:14px;line-height:1.45;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}\n.log-body{min-width:0;flex:1 1 auto}\n.log-text{\n  display:block; color:var(--oc-text); word-break:break-word;\n  font-family:'JetBrains Mono','Cascadia Mono',Consolas,ui-monospace,monospace;\n  font-size:12.4px; letter-spacing:.1px; font-weight:500;\n}\n.log-time{display:block;margin-top:3px;font-size:9.5px;color:var(--oc-dim);letter-spacing:.08em;opacity:.75}\n\n/* countdown card */\n.oc-cd{display:flex;align-items:center;gap:12px;width:100%}\n.oc-cd-ring{position:relative;width:44px;height:44px;flex:0 0 auto}\n.oc-cd-ring svg{width:44px;height:44px;transform:rotate(-90deg);display:block}\n.oc-cd-ring .oc-trk{stroke:rgba(255,255,255,.10)}\n.oc-cd-ring .oc-arc{stroke:url(#ocGrad);transition:stroke-dashoffset .5s linear;filter:drop-shadow(0 0 5px rgba(168,85,247,.85))}\n.oc-cd-num{\n  position:absolute;inset:0;display:grid;place-items:center;\n  font-family:'JetBrains Mono',Consolas,ui-monospace,monospace;\n  font-size:12.5px;font-weight:700;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8);\n}\n.oc-cd-meta{min-width:0;flex:1 1 auto}\n.oc-cd-title{font-size:12px;font-weight:600;color:var(--oc-text);letter-spacing:.02em}\n.oc-cd-step{color:#d8b4fe}\n.oc-cd-hint{font-size:10px;color:var(--oc-dim);margin-top:3px;animation:oc-breathe 2.4s ease-in-out infinite}\n.oc-cd-bar{margin-top:6px;height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}\n.oc-cd-bar>i{\n  display:block;height:100%;border-radius:99px;\n  background:linear-gradient(90deg,var(--oc-accent),var(--oc-accent2),var(--oc-accent3));\n  background-size:200% 100%; transition:width .5s linear; animation:oc-sheen 3s linear infinite;\n}\n\n/* manual domain form */\n#manual-input-container{\n  margin:10px 2px 4px; padding:12px; border-radius:13px;\n  background:linear-gradient(180deg,rgba(168,85,247,.10),rgba(255,255,255,.03));\n  border:1px solid rgba(168,85,247,.30);\n  box-shadow:0 8px 24px -12px rgba(168,85,247,.6);\n  animation:oc-in .3s ease both;\n}\n.oc-form-label{display:block;font-size:10.5px;letter-spacing:.09em;color:var(--oc-dim);margin-bottom:7px;text-transform:uppercase}\n.oc-form-row{display:flex;gap:8px}\n#manual-domain-input{\n  flex:1 1 auto; min-width:0; padding:9px 12px; border-radius:9px;\n  background:rgba(0,0,0,.45); color:#fff; outline:none;\n  border:1px solid rgba(255,255,255,.10);\n  font:500 12.5px/1.3 'JetBrains Mono',Consolas,ui-monospace,monospace;\n  transition:border-color .18s, box-shadow .18s, background .18s;\n}\n#manual-domain-input::placeholder{color:rgba(155,147,184,.65)}\n#manual-domain-input:focus{\n  border-color:rgba(168,85,247,.75); background:rgba(0,0,0,.6);\n  box-shadow:0 0 0 3px rgba(168,85,247,.16);\n}\n#manual-domain-btn{\n  flex:0 0 auto; padding:9px 16px; border:none; border-radius:9px; cursor:pointer;\n  color:#fff; font:700 12.5px/1 'Inter',system-ui,sans-serif; letter-spacing:.03em;\n  background:linear-gradient(135deg,#a855f7,#7c3aed 55%,#22d3ee);\n  background-size:180% 180%;\n  box-shadow:0 6px 18px -6px rgba(168,85,247,.85), 0 1px 0 rgba(255,255,255,.25) inset;\n  transition:transform .16s, box-shadow .16s, background-position .35s;\n}\n#manual-domain-btn:hover{transform:translateY(-1.5px);background-position:100% 0;box-shadow:0 10px 26px -6px rgba(168,85,247,.95)}\n#manual-domain-btn:active{transform:translateY(0) scale(.97)}\n\n@media (max-width:520px){\n  .lux-panel{left:12px;right:12px;bottom:12px;width:auto;height:56vh}\n  .lux-panel.oc-collapsed{width:auto!important}\n}\n@media (prefers-reduced-motion:reduce){\n  .lux-panel,.lux-panel::before,.log-entry,.oc-title,.oc-dot,.oc-cd-hint,.arh-sticker,.oc-cd-bar>i{animation:none!important}\n}\n";
+    styleEl.textContent = "\n:root{\n  --oc-bg:#08060f; --oc-bg2:#0d0a1a;\n  --oc-accent:#a855f7; --oc-accent2:#22d3ee; --oc-accent3:#f472b6;\n  --oc-text:#e9e6f5; --oc-dim:#9b93b8;\n  --oc-ok:#34d399; --oc-warn:#fbbf24; --oc-err:#fb7185; --oc-sys:#60a5fa;\n}\n@keyframes oc-in{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}\n@keyframes oc-pop{0%{opacity:0;transform:translateY(10px) scale(.96)}60%{transform:translateY(-2px) scale(1.01)}100%{opacity:1;transform:none}}\n@keyframes oc-spin{to{transform:rotate(360deg)}}\n@keyframes oc-aurora{0%{transform:translate(-12%,-8%) rotate(0deg)}50%{transform:translate(10%,8%) rotate(180deg)}100%{transform:translate(-12%,-8%) rotate(360deg)}}\n@keyframes oc-sheen{0%{background-position:-200% 0}100%{background-position:200% 0}}\n@keyframes oc-breathe{0%,100%{opacity:.55}50%{opacity:1}}\n@keyframes oc-float{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-9px) rotate(3deg)}}\n@keyframes oc-ring{0%{box-shadow:0 0 0 0 rgba(168,85,247,.55)}100%{box-shadow:0 0 0 14px rgba(168,85,247,0)}}\n@keyframes oc-bar{0%{background-position:0 0}100%{background-position:28px 0}}\n\n.lux-panel{\n  position:fixed; bottom:26px; right:26px; width:412px; height:396px;\n  z-index:2147483647; display:flex; flex-direction:column; overflow:visible;\n  color:var(--oc-text);\n  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;\n  font-size:13.5px; border-radius:20px;\n  background:\n    linear-gradient(180deg,rgba(20,16,34,.92),rgba(8,6,15,.96));\n  border:1px solid rgba(168,85,247,.22);\n  box-shadow:\n    0 24px 60px -12px rgba(0,0,0,.85),\n    0 0 0 1px rgba(255,255,255,.04) inset,\n    0 1px 0 rgba(255,255,255,.07) inset;\n  backdrop-filter:blur(22px) saturate(150%);\n  -webkit-backdrop-filter:blur(22px) saturate(150%);\n  animation:oc-pop .45s cubic-bezier(.2,.9,.25,1) both;\n  transition:height .34s cubic-bezier(.4,0,.2,1), width .34s cubic-bezier(.4,0,.2,1), box-shadow .3s;\n  will-change:height;\n}\n.lux-panel::before{ /* animated aurora wash */\n  content:''; position:absolute; inset:-40%; border-radius:50%; pointer-events:none;\n  background:\n    radial-gradient(38% 38% at 30% 30%,rgba(168,85,247,.30),transparent 70%),\n    radial-gradient(34% 34% at 70% 40%,rgba(34,211,238,.20),transparent 70%),\n    radial-gradient(30% 30% at 50% 75%,rgba(244,114,182,.18),transparent 70%);\n  filter:blur(26px); opacity:.85; animation:oc-aurora 22s linear infinite; z-index:0;\n}\n.lux-panel::after{ /* gradient hairline border */\n  content:''; position:absolute; inset:0; border-radius:20px; padding:1px; pointer-events:none;\n  background:linear-gradient(135deg,rgba(168,85,247,.75),rgba(34,211,238,.35) 40%,transparent 65%,rgba(244,114,182,.45));\n  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);\n  -webkit-mask-composite:xor; mask-composite:exclude; z-index:2;\n}\n.lux-panel.oc-collapsed{height:58px!important;width:300px!important}\n.lux-panel.oc-drag{transition:none; box-shadow:0 30px 80px -10px rgba(0,0,0,.95)}\n\n.arh-sticker{\n  position:absolute; top:-26px; left:-16px; z-index:5;\n  animation:oc-float 5s ease-in-out infinite;\n  filter:drop-shadow(0 8px 16px rgba(168,85,247,.5));\n}\n\n.lux-header{\n  position:relative; z-index:3; flex:0 0 auto;\n  display:flex; align-items:center; justify-content:space-between; gap:10px;\n  padding:13px 14px 13px 16px; border-radius:20px 20px 0 0;\n  background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.015));\n  border-bottom:1px solid rgba(255,255,255,.07);\n  cursor:grab; user-select:none;\n}\n.lux-header:active{cursor:grabbing}\n.oc-brand{display:flex;align-items:center;gap:10px;min-width:0}\n.oc-dot{\n  width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:var(--oc-ok);\n  box-shadow:0 0 10px var(--oc-ok); animation:oc-ring 2.2s ease-out infinite;\n}\n.oc-dot.oc-busy{background:var(--oc-accent2);box-shadow:0 0 10px var(--oc-accent2)}\n.oc-dot.oc-bad{background:var(--oc-err);box-shadow:0 0 10px var(--oc-err)}\n.oc-title{\n  font-weight:700; font-size:13px; letter-spacing:.10em; white-space:nowrap;\n  background:linear-gradient(92deg,#fff,#d8b4fe 35%,#67e8f9 65%,#fff);\n  background-size:200% auto; -webkit-background-clip:text; background-clip:text;\n  -webkit-text-fill-color:transparent; animation:oc-sheen 6s linear infinite;\n}\n.oc-sub{font-size:10px;color:var(--oc-dim);letter-spacing:.06em;margin-top:1px}\n.oc-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}\n.lux-btn{\n  -webkit-appearance:none; appearance:none; width:26px; height:26px; padding:0;\n  display:grid; place-items:center; border-radius:8px; cursor:pointer;\n  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08);\n  color:var(--oc-dim); font-size:14px; line-height:1; font-weight:700;\n  transition:all .18s ease;\n}\n.lux-btn:hover{background:rgba(168,85,247,.20);border-color:rgba(168,85,247,.5);color:#fff;transform:translateY(-1px)}\n.lux-btn:active{transform:translateY(0) scale(.94)}\n\n/* thin progress rail under the header */\n.oc-rail{position:relative;z-index:3;height:2px;flex:0 0 auto;background:rgba(255,255,255,.06);overflow:hidden}\n.oc-rail>i{\n  display:block;height:100%;width:0%;border-radius:2px;\n  background:linear-gradient(90deg,var(--oc-accent),var(--oc-accent2));\n  box-shadow:0 0 8px rgba(168,85,247,.7); transition:width .5s linear;\n}\n\n.lux-body{\n  position:relative; z-index:3; flex:1 1 auto; min-height:0;\n  padding:12px 12px 14px; overflow-y:auto; overflow-x:hidden;\n  line-height:1.55; scrollbar-width:thin; scrollbar-color:rgba(168,85,247,.45) transparent;\n  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 12px,#000 calc(100% - 10px),transparent 100%);\n          mask-image:linear-gradient(180deg,transparent 0,#000 12px,#000 calc(100% - 10px),transparent 100%);\n}\n.lux-body::-webkit-scrollbar{width:7px}\n.lux-body::-webkit-scrollbar-track{background:transparent}\n.lux-body::-webkit-scrollbar-thumb{\n  background:linear-gradient(180deg,rgba(168,85,247,.65),rgba(34,211,238,.45));\n  border-radius:99px; border:2px solid transparent; background-clip:content-box;\n}\n.lux-body::-webkit-scrollbar-thumb:hover{background:rgba(168,85,247,.9);background-clip:content-box}\n\n.log-entry{\n  position:relative; display:flex; align-items:flex-start; gap:9px;\n  margin-bottom:7px; padding:9px 11px 9px 12px; border-radius:11px;\n  background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.022));\n  border:1px solid rgba(255,255,255,.055);\n  box-shadow:0 1px 0 rgba(255,255,255,.04) inset;\n  animation:oc-in .3s cubic-bezier(.2,.9,.25,1) both;\n  transition:transform .18s ease, background .18s ease, border-color .18s ease;\n  overflow:hidden;\n}\n.log-entry:hover{transform:translateX(2px);background:rgba(255,255,255,.075);border-color:rgba(255,255,255,.11)}\n.log-entry::before{\n  content:''; position:absolute; left:0; top:0; bottom:0; width:3px; border-radius:3px 0 0 3px;\n  background:var(--oc-accent); opacity:.95;\n}\n.log-entry.lv-success::before{background:var(--oc-ok)}\n.log-entry.lv-warn::before{background:var(--oc-warn)}\n.log-entry.lv-error::before{background:var(--oc-err)}\n.log-entry.lv-system::before{background:var(--oc-sys)}\n.log-entry.lv-error{background:linear-gradient(180deg,rgba(251,113,133,.12),rgba(251,113,133,.04));border-color:rgba(251,113,133,.24)}\n.log-entry.lv-success{background:linear-gradient(180deg,rgba(52,211,153,.11),rgba(52,211,153,.035));border-color:rgba(52,211,153,.22)}\n.log-icon{flex:0 0 auto;font-size:14px;line-height:1.45;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}\n.log-body{min-width:0;flex:1 1 auto}\n.log-text{\n  display:block; color:var(--oc-text); word-break:break-word;\n  font-family:'JetBrains Mono','Cascadia Mono',Consolas,ui-monospace,monospace;\n  font-size:12.4px; letter-spacing:.1px; font-weight:500;\n}\n.log-time{display:block;margin-top:3px;font-size:9.5px;color:var(--oc-dim);letter-spacing:.08em;opacity:.75}\n\n/* countdown card */\n.oc-cd{display:flex;align-items:center;gap:12px;width:100%}\n.oc-cd-ring{position:relative;width:44px;height:44px;flex:0 0 auto}\n.oc-cd-ring svg{width:44px;height:44px;transform:rotate(-90deg);display:block}\n.oc-cd-ring .oc-trk{stroke:rgba(255,255,255,.10)}\n.oc-cd-ring .oc-arc{stroke:url(#ocGrad);transition:stroke-dashoffset .5s linear;filter:drop-shadow(0 0 5px rgba(168,85,247,.85))}\n.oc-cd-num{\n  position:absolute;inset:0;display:grid;place-items:center;\n  font-family:'JetBrains Mono',Consolas,ui-monospace,monospace;\n  font-size:12.5px;font-weight:700;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8);\n}\n.oc-cd-meta{min-width:0;flex:1 1 auto}\n.oc-cd-title{font-size:12px;font-weight:600;color:var(--oc-text);letter-spacing:.02em}\n.oc-cd-step{color:#d8b4fe}\n.oc-cd-hint{font-size:10px;color:var(--oc-dim);margin-top:3px;animation:oc-breathe 2.4s ease-in-out infinite}\n.oc-cd-bar{margin-top:6px;height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}\n.oc-cd-bar>i{\n  display:block;height:100%;border-radius:99px;\n  background:linear-gradient(90deg,var(--oc-accent),var(--oc-accent2),var(--oc-accent3));\n  background-size:200% 100%; transition:width .5s linear; animation:oc-sheen 3s linear infinite;\n}\n\n/* manual domain form */\n#manual-input-container{\n  margin:10px 2px 4px; padding:12px; border-radius:13px;\n  background:linear-gradient(180deg,rgba(168,85,247,.10),rgba(255,255,255,.03));\n  border:1px solid rgba(168,85,247,.30);\n  box-shadow:0 8px 24px -12px rgba(168,85,247,.6);\n  animation:oc-in .3s ease both;\n}\n.oc-form-label{display:block;font-size:10.5px;letter-spacing:.09em;color:var(--oc-dim);margin-bottom:7px;text-transform:uppercase}\n.oc-form-row{display:flex;gap:8px}\n#manual-domain-input{\n  flex:1 1 auto; min-width:0; padding:9px 12px; border-radius:9px;\n  background:rgba(0,0,0,.45); color:#fff; outline:none;\n  border:1px solid rgba(255,255,255,.10);\n  font:500 12.5px/1.3 'JetBrains Mono',Consolas,ui-monospace,monospace;\n  transition:border-color .18s, box-shadow .18s, background .18s;\n}\n#manual-domain-input::placeholder{color:rgba(155,147,184,.65)}\n#manual-domain-input:focus{\n  border-color:rgba(168,85,247,.75); background:rgba(0,0,0,.6);\n  box-shadow:0 0 0 3px rgba(168,85,247,.16);\n}\n#manual-domain-btn{\n  flex:0 0 auto; padding:9px 16px; border:none; border-radius:9px; cursor:pointer;\n  color:#fff; font:700 12.5px/1 'Inter',system-ui,sans-serif; letter-spacing:.03em;\n  background:linear-gradient(135deg,#a855f7,#7c3aed 55%,#22d3ee);\n  background-size:180% 180%;\n  box-shadow:0 6px 18px -6px rgba(168,85,247,.85), 0 1px 0 rgba(255,255,255,.25) inset;\n  transition:transform .16s, box-shadow .16s, background-position .35s;\n}\n#manual-domain-btn:hover{transform:translateY(-1.5px);background-position:100% 0;box-shadow:0 10px 26px -6px rgba(168,85,247,.95)}\n#manual-domain-btn:active{transform:translateY(0) scale(.97)}\n\n@media (max-width:520px){\n  .lux-panel{left:8px;right:8px;bottom:8px;width:auto;max-width:none;height:auto;max-height:42vh;border-radius:14px}\n  .lux-panel.oc-collapsed{max-height:52px!important;width:auto!important}\n  .lux-header{padding:10px 10px 10px 12px;border-radius:14px 14px 0 0}\n  .lux-body{padding:8px 8px 10px;font-size:12px}\n  .log-entry{padding:7px 9px 7px 10px;margin-bottom:5px;border-radius:9px}\n  .log-text{font-size:11px}\n  .log-time{font-size:9px}\n  .arh-sticker{width:40px!important;height:40px!important;top:-18px;left:-10px}\n  .oc-cd-ring{width:36px;height:36px}\n  .oc-cd-ring svg{width:36px;height:36px}\n  .oc-cd-num{font-size:11px}\n  .oc-cd-title{font-size:11px}\n  .oc-cd-hint{font-size:9px}\n  #manual-domain-input{padding:8px 10px;font-size:11px}\n  #manual-domain-btn{padding:8px 14px;font-size:11px}\n}\n@media (max-width:360px){\n  .lux-panel{max-height:36vh;border-radius:12px;bottom:4px;left:4px;right:4px}\n  .lux-header{padding:8px 8px 8px 10px}\n  .oc-title{font-size:11.5px}\n  .lux-body{padding:6px 6px 8px}\n  .log-entry{padding:6px 7px 6px 8px}\n  .log-text{font-size:10.5px}\n}\n@media (prefers-reduced-motion:reduce){\n  .lux-panel,.lux-panel::before,.log-entry,.oc-title,.oc-dot,.oc-cd-hint,.arh-sticker,.oc-cd-bar>i{animation:none!important}\n}\n";
     document.head.appendChild(styleEl);
     let panel = document.createElement('div');
     panel.className = 'lux-panel';
@@ -238,6 +325,43 @@
     panel.appendChild(panelBody);
     if (hostname.includes('octolink.vip')) panel.style.display = 'none';
     document.body.appendChild(panel);
+
+    // ---- mobile override: tắt GPU-heavy effects, panel nhỏ hơn ----------
+    var _mobCss = document.createElement('style');
+    _mobCss.textContent =
+      '@media(max-width:520px){\n' +
+      '.lux-panel{left:8px;right:8px;bottom:8px;width:auto!important;height:auto!important;' +
+      'max-height:42vh;border-radius:14px;backdrop-filter:none;-webkit-backdrop-filter:none;' +
+      'box-shadow:0 12px 30px -8px rgba(0,0,0,.9);animation:none}\n' +
+      '.lux-panel.oc-collapsed{max-height:52px!important}\n' +
+      '.lux-panel::before,.lux-panel::after{animation:none!important;filter:none!important;opacity:0!important}\n' +
+      '.lux-header{padding:10px 10px 10px 12px;border-radius:14px 14px 0 0}\n' +
+      '.lux-body{padding:8px 8px 10px;font-size:12px}\n' +
+      '.log-entry{padding:7px 9px 7px 10px;margin-bottom:5px;border-radius:9px}\n' +
+      '.log-text{font-size:11px}\n' +
+      '.log-time{font-size:9px}\n' +
+      '.arh-sticker{width:40px!important;height:40px!important;top:-18px;left:-10px}\n' +
+      '.oc-title{font-size:11.5px}\n' +
+      '.oc-sub{font-size:9px}\n' +
+      '.lux-btn{width:24px;height:24px;font-size:12px}\n' +
+      '.oc-cd{flex-wrap:wrap}\n' +
+      '.oc-cd-ring{width:36px;height:36px}\n' +
+      '.oc-cd-ring svg{width:36px;height:36px}\n' +
+      '.oc-cd-num{font-size:11px}\n' +
+      '.oc-cd-title{font-size:11px}\n' +
+      '.oc-cd-hint{font-size:9px}\n' +
+      '#manual-domain-input{padding:8px 10px;font-size:11px}\n' +
+      '#manual-domain-btn{padding:8px 14px;font-size:11px}\n' +
+      '#manual-input-container{margin:6px 1px 2px;padding:8px;border-radius:10px}\n' +
+      '}\n' +
+      '@media(max-width:360px){\n' +
+      '.lux-panel{max-height:36vh;border-radius:12px;bottom:4px;left:4px;right:4px}\n' +
+      '.lux-header{padding:8px 8px 8px 10px}\n' +
+      '.lux-body{padding:6px 6px 8px}\n' +
+      '.log-entry{padding:6px 7px 6px 8px}\n' +
+      '.log-text{font-size:10.5px}\n' +
+      '}';
+    document.head.appendChild(_mobCss);
 
     // ---- collapse / expand -------------------------------------------------
     let panelCollapsed = false;
@@ -437,6 +561,52 @@
     setStatus('sẵn sàng', 'busy');
     setRail(4);
     log('Khởi động siêu hệ thống...', 'system');
+    // ---- startup network diagnostic ------------------------------------
+    if (typeof GM_xmlhttpRequest === 'function') {
+      var _diagT0 = Date.now();
+      GM_xmlhttpRequest({
+        method: 'HEAD',
+        url: 'https://octolink.vip/',
+        timeout: 8000,
+        headers: { 'user-agent': navigator.userAgent },
+        onload: function (r) {
+          var ms = Date.now() - _diagT0;
+          log('Mạng OK → octolink.vip (' + r.status + ', ' + ms + 'ms)', 'success');
+        },
+        onerror: function () {
+          var ms = Date.now() - _diagT0;
+          log('⚠ Mạng lỗi → octolink.vip (' + ms + 'ms). Kiểm tra DNS/VPN/firewall.', 'error');
+          console.error('[DIAG] octolink.vip unreachable — possible causes:\n' +
+            '  1. DNS blocked by ISP (try change DNS to 8.8.8.8 / 1.1.1.1)\n' +
+            '  2. VPN/proxy intercepting HTTPS\n' +
+            '  3. Firewall rule blocking octolink.vip\n' +
+            '  4. GM_xmlhttpRequest CORS restriction\n' +
+            '  5. octolink.vip down\n' +
+            '  UA: ' + (navigator.userAgent || '').substring(0, 100));
+        },
+        ontimeout: function () {
+          log('⚠ octolink.vip timeout (8s) — mạng chậm hoặc bị chặn.', 'error');
+        }
+      });
+      var _diagGhT0 = Date.now();
+      GM_xmlhttpRequest({
+        method: 'HEAD',
+        url: 'https://api.github.com/',
+        timeout: 8000,
+        onload: function (r) {
+          var ms = Date.now() - _diagGhT0;
+          log('Mạng OK → api.github.com (' + r.status + ', ' + ms + 'ms)', 'success');
+        },
+        onerror: function () {
+          var ms = Date.now() - _diagGhT0;
+          log('⚠ Mạng lỗi → api.github.com (' + ms + 'ms)', 'warn');
+        },
+        ontimeout: function () {
+          log('⚠ api.github.com timeout (8s)', 'warn');
+        }
+      });
+    }
+    // ---- network ping (no credentials needed) -------------------------
     function disableCaptchaButtons() {
       document
         .querySelectorAll('#invisibleCaptchaShortlink, button[type="submit"], .btn-captcha')
@@ -445,6 +615,296 @@
           item.style.pointerEvents = 'none';
           item.innerText = 'Hệ thống đang xử lý, xin đừng nhấn...';
         });
+    }
+    // ====================================================================
+    // HOLD CAPTCHA — tự di chuyển dấu chấm vào vòng tròn trên canvas,
+    // giữ 1 giây rồi bấm nút lấy link gốc (trang octolink.vip/finish/...)
+    // ====================================================================
+    var holdCaptcha = {
+      inited: false,
+      solverTimer: null,
+      pollTimer: null,
+      done: false
+    };
+    function runFinishPageSolver(submitForm) {
+      if (holdCaptcha.inited && holdCaptcha.solverTimer) {
+        log('Hold captcha đang chạy sẵn.', 'info');
+        return;
+      }
+      holdCaptcha.inited = true;
+      holdCaptcha.done = false;
+      log('Đang khởi động bộ giải giữ-chuột...', 'system');
+      startHoldCaptchaSolverWithForm(submitForm);
+      // poll giá trị đã điền -> khi xong, tự bấm nút lấy link gốc
+      holdCaptcha.pollTimer = setInterval(function () {
+        if (holdCaptcha.done) {
+          clearInterval(holdCaptcha.pollTimer);
+          return;
+        }
+        var resInput =
+          document.getElementById('hold_captcha_response') ||
+          document.querySelector('input[name="hold_captcha_response"]');
+        if (resInput && resInput.value && resInput.value.length > 5) {
+          holdCaptcha.done = true;
+          clearInterval(holdCaptcha.pollTimer);
+          log('Đã điền giữ-chuột thành công. Lấy link gốc...', 'success');
+          if (submitForm) {
+            try {
+              submitForm();
+            } catch (e) {}
+          }
+          try {
+            clickOriginalLinkButton();
+          } catch (e) {}
+        }
+      }, 400);
+    }
+    function clickOriginalLinkButton() {
+      var candidates = document.querySelectorAll(
+        'a, button, input[type="submit"], input[type="button"], .btn-primary, .btn-captcha, .btn'
+      );
+      for (var i = 0; i < candidates.length; i++) {
+        var b = candidates[i];
+        var txt = (b.innerText || b.value || b.textContent || '').toLowerCase();
+        var href = (b.getAttribute('href') || b.getAttribute('action') || '').toLowerCase();
+        var hit =
+          href.includes('kiemcom') ||
+          href.includes('skibiditask') ||
+          txt.includes('link gốc') ||
+          txt.includes('quay về') ||
+          txt.includes('lấy link') ||
+          txt.includes('tiếp tục') ||
+          txt.includes('continue');
+        if (hit) {
+          try {
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (n) {
+              b.dispatchEvent(
+                new MouseEvent(n, { bubbles: true, cancelable: true, view: window })
+              );
+            });
+            b.click();
+          } catch (e) {}
+          return;
+        }
+      }
+      // chưa thấy nút link gốc -> thử submit form và quét DOM sau
+      log('Nút link gốc chưa xuất hiện, đang quét tiếp...', 'warn');
+      try {
+        var form = document.querySelector('form');
+        if (form) form.submit();
+      } catch (e) {}
+      setTimeout(function () {
+        var m = document.body.innerHTML.match(
+          /<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>[^<]*Link\s*G[óo]c/i
+        );
+        if (m && isFinalLink(m[1])) finishPageReveal(m[1]);
+        else {
+          var any = document.body.innerHTML.match(/href=["'](https?:\/\/[^"']+)["']/i);
+          if (any && isFinalLink(any[1])) finishPageReveal(any[1]);
+        }
+      }, 1500);
+    }
+    function finishPageReveal(url) {
+      try {
+        rememberCampaign(missionId, { finalUrl: url, countRun: true });
+      } catch (e) {}
+      log(
+        'LINK GỐC: <a href="' +
+          url +
+          '" target="_blank" rel="noreferrer" style="color:#67e8f9;text-decoration:underline">' +
+          url +
+          '</a>',
+        'success'
+      );
+      log('Tự động mở link sau 2 giây...', 'system');
+      setTimeout(function () {
+        window.location.href = url;
+      }, 2000);
+    }
+    function runHoldCaptchaSolver(submitForm) {
+      runFinishPageSolver(submitForm);
+    }
+    // --- solver canvas (giữ dấu chấm vào vòng tròn) -----------------------
+    function startHoldCaptchaSolverWithForm(submitForm) {
+      var solverState = { running: false, interval: null, finished: false };
+      function searchCanvasDeep(node) {
+        if (!node) return null;
+        if (node.tagName === 'CANVAS') return node;
+        if (node.querySelector) {
+          var c = node.querySelector('canvas');
+          if (c) return c;
+        }
+        if (node.shadowRoot) {
+          var fc = searchCanvasDeep(node.shadowRoot);
+          if (fc) return fc;
+        }
+        if (node.querySelectorAll) {
+          var children = node.querySelectorAll('*');
+          for (var i = 0; i < children.length; i++) {
+            var el = children[i];
+            if (el.tagName === 'CANVAS') return el;
+            if (el.shadowRoot) {
+              var fc2 = searchCanvasDeep(el.shadowRoot);
+              if (fc2) return fc2;
+            }
+          }
+        }
+        return null;
+      }
+      function findCanvasAuto() {
+        if (document.body) {
+          var f = searchCanvasDeep(document.body);
+          if (f) return f;
+        }
+        if (document.documentElement) {
+          var f2 = searchCanvasDeep(document.documentElement);
+          if (f2) return f2;
+        }
+        return null;
+      }
+      function dispatchEvents(target, x, y) {
+        var base = {
+          clientX: x,
+          clientY: y,
+          pageX: x + window.scrollX,
+          pageY: y + window.scrollY,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true
+        };
+        try {
+          target.dispatchEvent(new PointerEvent('pointermove', base));
+          target.dispatchEvent(new MouseEvent('mousemove', base));
+        } catch (e) {}
+      }
+      function getExactCanvasRect(canvas) {
+        var r = canvas.getBoundingClientRect();
+        if (r && r.width > 0) return r;
+        var host = document.getElementById('captchaShortlink') || document.querySelector('[id*="pe"]');
+        if (host) {
+          var hr = host.getBoundingClientRect();
+          var cw = Math.min(hr.width, 504);
+          var off = (hr.width - cw) / 2;
+          return { left: hr.left + off, top: hr.top, width: cw, height: hr.height || 430 };
+        }
+        return null;
+      }
+      function runWithCanvas(canvas) {
+        if (!canvas || solverState.running) return;
+        solverState.running = true;
+        var ctx;
+        try {
+          ctx = canvas.getContext('2d', { willReadFrequently: true }) || canvas.getContext('2d');
+        } catch (e) {
+          return;
+        }
+        // kích hoạt widget bằng click/hover ở giữa
+        var rect = getExactCanvasRect(canvas);
+        if (rect && rect.width > 0) {
+          var ix = rect.left + rect.width / 2;
+          var iy = rect.top + rect.height / 2;
+          var opts = {
+            clientX: ix,
+            clientY: iy,
+            pageX: ix + window.scrollX,
+            pageY: iy + window.scrollY,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true
+          };
+          try {
+            canvas.dispatchEvent(new PointerEvent('pointerenter', opts));
+            canvas.dispatchEvent(new MouseEvent('mouseenter', opts));
+            dispatchEvents(canvas, ix, iy);
+            canvas.dispatchEvent(new MouseEvent('click', opts));
+          } catch (e) {}
+        }
+        var started = Date.now();
+        solverState.interval = setInterval(function () {
+          if (solverState.finished) {
+            clearInterval(solverState.interval);
+            return;
+          }
+          var resInput =
+            document.getElementById('hold_captcha_response') ||
+            document.querySelector('input[name="hold_captcha_response"]');
+          if (resInput && resInput.value && resInput.value.length > 5) {
+            solverState.finished = true;
+            clearInterval(solverState.interval);
+            if (typeof window.__ocHoldSolved === 'function') window.__ocHoldSolved();
+            return;
+          }
+          if (Date.now() - started > 60000) {
+            solverState.finished = true;
+            clearInterval(solverState.interval);
+            log('Hold captcha quá lâu, tạm dừng.', 'warn');
+            return;
+          }
+          rect = getExactCanvasRect(canvas);
+          if (!rect || rect.width === 0) return;
+          var w = canvas.width || 504;
+          var h = canvas.height || 430;
+          var scaleX = rect.width / w;
+          var scaleY = rect.height / h;
+          var startY = Math.floor(h * 0.28);
+          var endY = Math.floor(h * 0.95);
+          var scanH = endY - startY;
+          var imgData;
+          try {
+            imgData = ctx.getImageData(0, startY, w, scanH);
+          } catch (e) {
+            return;
+          }
+          var data = imgData.data;
+          var sumX = 0,
+            sumY = 0,
+            count = 0;
+          for (var y = 0; y < scanH; y += 2) {
+            var rowPixels = [];
+            for (var x = 0; x < w; x += 2) {
+              var idx = (y * w + x) * 4;
+              var r = data[idx],
+                g = data[idx + 1],
+                b = data[idx + 2],
+                a = data[idx + 3];
+              if (a > 180 && r < 65 && g < 65 && b < 65) rowPixels.push(x);
+            }
+            if (rowPixels.length >= 5 && rowPixels.length <= 26) {
+              for (var k = 0; k < rowPixels.length; k++) {
+                sumX += rowPixels[k];
+                sumY += y + startY;
+                count++;
+              }
+            }
+          }
+          if (count > 8) {
+            var dotX = sumX / count;
+            var dotY = sumY / count;
+            var tx = rect.left + dotX * scaleX;
+            var ty = rect.top + dotY * scaleY;
+            dispatchEvents(canvas, tx, ty);
+            dispatchEvents(document, tx, ty);
+          }
+        }, 20);
+      }
+      // poll đến khi có canvas
+      var attempts = 0;
+      var poll = setInterval(function () {
+        var canvas = findCanvasAuto();
+        if (canvas) {
+          clearInterval(poll);
+          runWithCanvas(canvas);
+        } else if (++attempts > 60) {
+          clearInterval(poll);
+          log('Không tìm thấy canvas giữ-chuột.', 'error');
+        }
+      }, 200);
     }
     if (hasCsrfForm || originalLinkMatch) {
       {
@@ -469,7 +929,14 @@
           hasHcaptcha =
             pageHtml.includes('h-captcha') ||
             document.querySelector('.h-captcha') ||
-            document.querySelector('[name="h-captcha-response"]');
+            document.querySelector('[name="h-captcha-response"]'),
+          hasHoldCaptcha =
+            pageHtml.includes('hold_captcha') ||
+            pageHtml.includes('holdcaptcha') ||
+            document.querySelector('[name="hold_captcha_response"]') ||
+            document.querySelector('#hold_captcha_response') ||
+            document.querySelector('#captchaShortlink') ||
+            document.querySelector('[id*="pe"]');
         function announceFinalLink(url) {
           rememberCampaign(missionId, { finalUrl: url, countRun: true });
           log(
@@ -577,28 +1044,33 @@
             log('Không thể xác định được yêu cầu bảo mật.', 'error');
           }
         } else {
-          if (hasRecaptcha || hasHcaptcha) {
-            log('Nhận diện lớp bảo mật hình ảnh.', 'warn');
-            log('Vui lòng hoàn thành xác thực. Hệ thống đang chờ tín hiệu...', 'warn');
-            // BUGFIX: thêm giới hạn 5 phút, trước đây poll vô hạn
-            let captchaTicks = 0;
-            let captchaTimer = setInterval(() => {
-              var recaptchaValue = document.querySelector('[name="g-recaptcha-response"]')?.[
-                  'value'
-                ],
-                hcaptchaValue = document.querySelector('[name="h-captcha-response"]')?.['value'];
-              if (recaptchaValue || hcaptchaValue) {
-                clearInterval(captchaTimer);
-                disableCaptchaButtons();
-                log('Xác thực thành công! Đang thiết lập kết nối...', 'success');
-                submitFormAndFindLink(targetForm);
-                return;
-              }
-              if (++captchaTicks > 300) {
-                clearInterval(captchaTimer);
-                log('Hết thời gian chờ xác thực hình ảnh (5 phút).', 'error');
-              }
-            }, 1000);
+          if (hasHoldCaptcha) {
+            log('Nhận diện lớp bảo mật giữ chuột (hold captcha). Tự động xử lý...', 'warn');
+            runHoldCaptchaSolver(targetForm);
+          } else {
+            if (hasRecaptcha || hasHcaptcha) {
+              log('Nhận diện lớp bảo mật hình ảnh.', 'warn');
+              log('Vui lòng hoàn thành xác thực. Hệ thống đang chờ tín hiệu...', 'warn');
+              // BUGFIX: thêm giới hạn 5 phút, trước đây poll vô hạn
+              let captchaTicks = 0;
+              let captchaTimer = setInterval(() => {
+                var recaptchaValue = document.querySelector('[name="g-recaptcha-response"]')?.[
+                    'value'
+                  ],
+                  hcaptchaValue = document.querySelector('[name="h-captcha-response"]')?.['value'];
+                if (recaptchaValue || hcaptchaValue) {
+                  clearInterval(captchaTimer);
+                  disableCaptchaButtons();
+                  log('Xác thực thành công! Đang thiết lập kết nối...', 'success');
+                  submitFormAndFindLink(targetForm);
+                  return;
+                }
+                if (++captchaTicks > 300) {
+                  clearInterval(captchaTimer);
+                  log('Hết thời gian chờ xác thực hình ảnh (5 phút).', 'error');
+                }
+              }, 1000);
+            }
           }
         }
         return;
@@ -612,6 +1084,12 @@
     if (hostname.includes('octolink.vip') && !queryParams.has('redirect_to_octo')) {
       if (pathSegments.length > 0) {
         var slug = pathSegments[pathSegments.length - 1].replace(/\.html?$/i, '');
+        var firstSeg = (pathSegments[0] || '').toLowerCase();
+        if (firstSeg === 'finish') {
+          log('Trang hoàn tất Octolink. Tự động giải giữ-chuột...', 'warn');
+          runFinishPageSolver(null);
+          return;
+        }
         !/^(statics|js|css|check|finish|links|forms|api|admin|login|register|modern_theme|images|wp-|favicon|robots)$/i.test(
           slug
         ) &&
@@ -890,41 +1368,28 @@
     }
     var campaignCache = null;
     function fetchCampaigns(done) {
-      if (campaignCache) {
-        done && done(campaignCache);
-        return;
-      }
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: 'https://moneytask.top/api/tasks/uptolink-campaigns',
-        timeout: 0x4e20,
-        headers: {
-          Accept: 'application/json',
-          Authorization:
-            'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZSI6bnVsbCwidXNlcklkIjo4Njc2LCJyb2xlIjoxLCJpYXQiOjE3ODczMjUyNDAsImV4cCI6MTc4NzkzMDA0MH0.7H9HFjDNFy9wpKRzHOmdQ92sl7gXveSlSMU29mrDyb8'
-        },
-        onload: function (response) {
-          try {
-            var json = JSON.parse(response.responseText);
-            campaignCache = json.data || [];
-          } catch (err) {
-            campaignCache = [];
-          }
-          done && done(campaignCache);
-        },
-        onerror: function () {
-          campaignCache = [];
-          done && done([]);
-        },
-        // BUGFIX: thiếu ontimeout -> luồng đứng im khi API treo
-        ontimeout: function () {
-          log('API campaign quá thời gian chờ, chuyển sang cache.', 'warn');
-          campaignCache = [];
-          done && done([]);
-        }
-      });
+      // Moneytask JWT removed (expired) — skip API, fall through to cache/manual
+      campaignCache = [];
+      done && done([]);
     }
     function resolveByCampaign(missionId2) {
+      // --- blacklist nhiệm vụ: khớp mã nhiệm vụ HOẶC tên tab -------------
+      var MISSION_BLACKLIST = [199, 237, 168, 33];
+      var tabTitle = (document.title || '').toLowerCase().replace(/\s+/g, '');
+      var missionCode = String(missionId2 || '')
+        .toLowerCase()
+        .replace(/[^0-9]/g, '');
+      var isBlacklisted = MISSION_BLACKLIST.some(function (id) {
+        var code = String(id);
+        if (missionCode === code) return true;
+        if (tabTitle.includes(code)) return true;
+        return false;
+      });
+      if (isBlacklisted) {
+        log('Nhiệm vụ [' + missionId2 + '] nằm trong danh sách chặn. Bỏ qua.', 'warn');
+        showManualDomainForm();
+        return;
+      }
       // --- tự điền từ nhiệm vụ đã làm trước đó ---------------------------
       var recalled = recallCampaign(missionId2, null);
       if (recalled && recalled.data.domain) {
@@ -1011,7 +1476,7 @@
     function resolveByGithubCache(missionId2) {
       if (!GITHUB_TOKEN) {
         return (
-          log('Thiếu cấu hình Token GitHub. Chuyển sang nhập tay.', 'error'),
+          log('Cache GitHub chưa cấu hình. Nhập tên miền thủ công.', 'info'),
           showManualDomainForm()
         );
       }
