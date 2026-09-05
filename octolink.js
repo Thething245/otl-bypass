@@ -401,6 +401,7 @@
       '<span class="oc-sub" id="oc-status-text">đang khởi tạo…</span></span>' +
       '</div>' +
       '<div class="oc-actions">' +
+      '<button id="oc-bl-btn" class="lux-btn" title="Danh sách chặn" aria-label="Danh sách chặn">⛔</button>' +
       '<button id="oc-clear-btn" class="lux-btn" title="Xoá log" aria-label="Xoá log">⌫</button>' +
       '<button id="lux-toggle-btn" class="lux-btn" title="Thu nhỏ / Phóng to" aria-label="Thu nhỏ">−</button>' +
       '</div>';
@@ -453,6 +454,67 @@
       '.log-text{font-size:10.5px}\n' +
       '}';
     document.head.appendChild(_mobCss);
+
+    // ---- CSS cho bảng blacklist ------------------------------------------
+    var _blCss = document.createElement('style');
+    _blCss.textContent =
+      '#oc-bl-panel{margin:10px 2px 4px;padding:12px;border-radius:13px;' +
+      'background:linear-gradient(180deg,rgba(251,113,133,.10),rgba(255,255,255,.03));' +
+      'border:1px solid rgba(251,113,133,.30);' +
+      'box-shadow:0 8px 24px -12px rgba(251,113,133,.55);animation:oc-in .3s ease both}\n' +
+      '#oc-bl-panel .oc-bl-head{display:flex;align-items:center;justify-content:space-between;' +
+      'gap:8px;margin-bottom:9px}\n' +
+      '#oc-bl-panel .oc-bl-title{font-size:10.5px;letter-spacing:.09em;color:var(--oc-dim);' +
+      'text-transform:uppercase}\n' +
+      '.oc-bl-sect{font-size:9.5px;letter-spacing:.08em;color:var(--oc-dim);' +
+      'text-transform:uppercase;margin:8px 0 5px}\n' +
+      '.oc-bl-tags{display:flex;flex-wrap:wrap;gap:5px}\n' +
+      '.oc-bl-tag{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;' +
+      'border-radius:99px;font:600 11px/1.35 "JetBrains Mono",Consolas,ui-monospace,monospace;' +
+      'background:rgba(251,113,133,.13);border:1px solid rgba(251,113,133,.32);color:#fecdd3}\n' +
+      '.oc-bl-tag.oc-bl-fixed{background:rgba(255,255,255,.06);' +
+      'border-color:rgba(255,255,255,.12);color:var(--oc-dim)}\n' +
+      '.oc-bl-tag.oc-bl-cur{background:rgba(168,85,247,.18);' +
+      'border-color:rgba(168,85,247,.55);color:#e9d5ff}\n' +
+      '.oc-bl-x{cursor:pointer;font-size:13px;line-height:1;opacity:.65;' +
+      'transition:opacity .15s,transform .15s}\n' +
+      '.oc-bl-x:hover{opacity:1;transform:scale(1.22)}\n' +
+      '.oc-bl-empty{font-size:11px;color:var(--oc-dim);opacity:.75;font-style:italic}\n' +
+      '.oc-bl-row{display:flex;gap:8px;margin-top:10px}\n' +
+      '#oc-bl-input{flex:1 1 auto;min-width:0;padding:8px 11px;border-radius:9px;' +
+      'background:rgba(0,0,0,.45);color:#fff;outline:none;' +
+      'border:1px solid rgba(255,255,255,.10);' +
+      'font:500 12px/1.3 "JetBrains Mono",Consolas,ui-monospace,monospace;' +
+      'transition:border-color .18s,box-shadow .18s,background .18s}\n' +
+      '#oc-bl-input::placeholder{color:rgba(155,147,184,.65)}\n' +
+      '#oc-bl-input:focus{border-color:rgba(251,113,133,.75);background:rgba(0,0,0,.6);' +
+      'box-shadow:0 0 0 3px rgba(251,113,133,.16)}\n' +
+      '#oc-bl-add,#oc-bl-cur{flex:0 0 auto;padding:8px 13px;border:none;border-radius:9px;' +
+      'cursor:pointer;color:#fff;font:700 11.5px/1 "Inter",system-ui,sans-serif;' +
+      'letter-spacing:.03em;transition:transform .16s,box-shadow .16s,background-position .35s;' +
+      'background:linear-gradient(135deg,#fb7185,#e11d48 55%,#a855f7);background-size:180% 180%;' +
+      'box-shadow:0 6px 18px -6px rgba(251,113,133,.8),' +
+      '0 1px 0 rgba(255,255,255,.25) inset}\n' +
+      '#oc-bl-add:hover,#oc-bl-cur:hover{transform:translateY(-1.5px);background-position:100% 0}\n' +
+      '#oc-bl-add:active,#oc-bl-cur:active{transform:translateY(0) scale(.97)}\n' +
+      '.oc-bl-note{margin-top:9px;font-size:10px;line-height:1.5;color:var(--oc-dim)}\n' +
+      '#oc-blocked-box{margin:8px 0 2px;padding:10px 12px;border-radius:10px;' +
+      'background:rgba(251,113,133,.10);border:1px solid rgba(251,113,133,.42);' +
+      'color:#fecdd3;font-size:12px;line-height:1.55;animation:oc-in .3s ease both}\n' +
+      '#oc-blocked-box .oc-unblock{margin-top:8px;padding:7px 13px;border:none;' +
+      'border-radius:8px;cursor:pointer;color:#fff;' +
+      'font:700 11.5px/1 "Inter",system-ui,sans-serif;' +
+      'background:linear-gradient(135deg,#34d399,#059669);' +
+      'box-shadow:0 6px 16px -6px rgba(52,211,153,.75)}\n' +
+      '#oc-blocked-box .oc-unblock:hover{transform:translateY(-1px)}\n' +
+      '@media(max-width:520px){' +
+      '#oc-bl-panel{margin:6px 1px 2px;padding:9px;border-radius:10px}' +
+      '.oc-bl-tag{font-size:10px;padding:2px 7px}' +
+      '#oc-bl-input{padding:7px 9px;font-size:11px}' +
+      '#oc-bl-add,#oc-bl-cur{padding:7px 11px;font-size:10.5px}' +
+      '.oc-bl-row{flex-wrap:wrap}' +
+      '}';
+    document.head.appendChild(_blCss);
 
     // ---- collapse / expand -------------------------------------------------
     let panelCollapsed = false;
@@ -816,6 +878,146 @@
         }
       } catch (err) {}
     }
+    // ====================================================================
+    // UI BẢNG BLACKLIST — bấm nút ⛔ trên header để mở
+    // ====================================================================
+    function escapeHtml(text) {
+      return String(text == null ? '' : text).replace(/[&<>"']/g, function (ch) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+      });
+    }
+    function buildBlacklistTags() {
+      var curSlug = normalizeBlacklistEntry(missionId);
+      var fixed = BLACKLIST_DEFAULT.map(function (id) {
+        var isCur = curSlug && (curSlug === id || curSlug.replace(/[^0-9]/g, '') === id);
+        return (
+          '<span class="oc-bl-tag oc-bl-fixed' +
+          (isCur ? ' oc-bl-cur' : '') +
+          '" title="Mã mặc định, không xoá được">' +
+          escapeHtml(id) +
+          (isCur ? ' ←' : '') +
+          '</span>'
+        );
+      }).join('');
+      var local = readLocalBlacklist();
+      var localHtml = local.length
+        ? local
+            .map(function (id) {
+              var isCur = curSlug === id;
+              return (
+                '<span class="oc-bl-tag' +
+                (isCur ? ' oc-bl-cur' : '') +
+                '">' +
+                escapeHtml(id) +
+                (isCur ? ' ←' : '') +
+                '<span class="oc-bl-x" data-bl-del="' +
+                escapeHtml(id) +
+                '" title="Bỏ chặn ' +
+                escapeHtml(id) +
+                '">×</span></span>'
+              );
+            })
+            .join('')
+        : '<span class="oc-bl-empty">chưa thêm mã nào</span>';
+      return (
+        '<div class="oc-bl-sect">Mặc định (' +
+        BLACKLIST_DEFAULT.length +
+        ')</div><div class="oc-bl-tags">' +
+        fixed +
+        '</div>' +
+        '<div class="oc-bl-sect">Tự thêm (' +
+        local.length +
+        ')</div><div class="oc-bl-tags" id="oc-bl-local">' +
+        localHtml +
+        '</div>'
+      );
+    }
+    function refreshBlacklistPanel() {
+      var host = document.getElementById('oc-bl-body');
+      if (!host) return;
+      host.innerHTML = buildBlacklistTags();
+      bindBlacklistDeletes();
+    }
+    function bindBlacklistDeletes() {
+      var nodes = document.querySelectorAll('#oc-bl-panel [data-bl-del]');
+      for (var i = 0; i < nodes.length; i++) {
+        nodes[i].addEventListener('click', function () {
+          var id = this.getAttribute('data-bl-del');
+          if (removeFromBlacklist(id)) refreshBlacklistPanel();
+        });
+      }
+    }
+    function addBlacklistFromInput() {
+      var input = document.getElementById('oc-bl-input');
+      if (!input) return;
+      var raw = String(input.value || '').trim();
+      if (!raw) {
+        log('Nhập mã nhiệm vụ cần chặn.', 'warn');
+        return;
+      }
+      var parts = raw.split(',');
+      var added = 0;
+      for (var i = 0; i < parts.length; i++) {
+        if (addToBlacklist(parts[i], 'thêm từ bảng điều khiển')) added++;
+      }
+      if (!added) log('Các mã này đã nằm trong danh sách chặn.', 'info');
+      input.value = '';
+      refreshBlacklistPanel();
+    }
+    function toggleBlacklistPanel() {
+      var existing = document.getElementById('oc-bl-panel');
+      if (existing) {
+        if (existing.parentNode) existing.parentNode.removeChild(existing);
+        return;
+      }
+      var box = document.createElement('div');
+      box.id = 'oc-bl-panel';
+      box.innerHTML =
+        '<div class="oc-bl-head">' +
+        '<span class="oc-bl-title">Danh sách chặn nhiệm vụ</span>' +
+        '<button id="oc-bl-close" class="lux-btn" title="Đóng" aria-label="Đóng">✕</button>' +
+        '</div>' +
+        '<div id="oc-bl-body">' +
+        buildBlacklistTags() +
+        '</div>' +
+        '<div class="oc-bl-row">' +
+        '<input type="text" id="oc-bl-input" autocomplete="off" spellcheck="false" ' +
+        'placeholder="mã nv, cách nhau bằng dấu phẩy">' +
+        '<button id="oc-bl-add">Chặn</button>' +
+        (missionId ? '<button id="oc-bl-cur">Chặn NV này</button>' : '') +
+        '</div>' +
+        '<div class="oc-bl-note">Nhiệm vụ bị chặn sẽ dừng hẳn, không chạy tiếp. ' +
+        'Tự động chặn sau ' +
+        FAIL_THRESHOLD +
+        ' lần thất bại.' +
+        (missionId ? '<br>NV hiện tại: <code>' + escapeHtml(missionId) + '</code>' : '') +
+        '</div>';
+      panelBody.appendChild(box);
+      panelBody.scrollTop = panelBody.scrollHeight;
+      bindBlacklistDeletes();
+      document.getElementById('oc-bl-close').addEventListener('click', function () {
+        toggleBlacklistPanel();
+      });
+      document.getElementById('oc-bl-add').addEventListener('click', addBlacklistFromInput);
+      document.getElementById('oc-bl-input').addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') addBlacklistFromInput();
+      });
+      var curBtn = document.getElementById('oc-bl-cur');
+      if (curBtn) {
+        curBtn.addEventListener('click', function () {
+          if (addToBlacklist(missionId, 'thêm từ bảng điều khiển')) {
+            log('Tải lại trang để áp dụng.', 'info');
+            refreshBlacklistPanel();
+          } else {
+            log('[' + missionId + '] đã nằm trong danh sách chặn.', 'info');
+          }
+        });
+      }
+    }
+    try {
+      var _blBtn = document.getElementById('oc-bl-btn');
+      if (_blBtn) _blBtn.addEventListener('click', toggleBlacklistPanel);
+    } catch (err) {}
     // ---- menu Tampermonkey: quản lý blacklist -------------------------
     if (typeof GM_registerMenuCommand === 'function') {
       try {
@@ -1404,23 +1606,48 @@
       setStatus('bị chặn', 'bad');
       setRail(100);
       try {
+        // panel bị ẩn trên octolink.vip / đang thu nhỏ -> bắt buộc hiện ra
+        panel.style.display = '';
+        if (panel.classList.contains('oc-collapsed')) {
+          panel.classList.remove('oc-collapsed');
+          panelBody.style.display = 'block';
+          panelRail.style.display = 'block';
+          var tgl = document.getElementById('lux-toggle-btn');
+          if (tgl) tgl.innerHTML = '−';
+        }
+      } catch (err) {}
+      try {
+        var old = document.getElementById('oc-blocked-box');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        var isLocal = readLocalBlacklist().indexOf(normalizeBlacklistEntry(id)) >= 0;
         var box = document.createElement('div');
         box.id = 'oc-blocked-box';
-        box.style.cssText =
-          'margin:8px 0 2px;padding:10px 12px;border-radius:10px;' +
-          'background:rgba(251,113,133,.10);border:1px solid rgba(251,113,133,.42);' +
-          'color:#fecdd3;font-size:12px;line-height:1.55';
         box.innerHTML =
-          '<b style="color:#fb7185">Nhiệm vụ bị chặn</b><br>' +
+          '<b style="color:#fb7185">⛔ NHIỆM VỤ BỊ CHẶN</b><br>' +
           'Mã: <code style="color:#fda4af">' +
-          String(id).replace(/[<>&]/g, '') +
+          escapeHtml(id) +
           '</code> — khớp <code style="color:#fda4af">' +
-          String(matchedBy).replace(/[<>&]/g, '') +
+          escapeHtml(matchedBy) +
           '</code><br>' +
-          '<span style="color:#9b93b8">Bỏ chặn qua menu Tampermonkey → "Bỏ chặn nhiệm vụ này".</span>';
+          '<span style="color:#9b93b8">Tiến trình đã dừng hoàn toàn.</span>' +
+          (isLocal
+            ? '<br><button class="oc-unblock" id="oc-unblock-btn">Bỏ chặn &amp; tải lại</button>'
+            : '<br><span style="color:#9b93b8;font-size:11px">Mã mặc định — sửa ' +
+              'BLACKLIST_DEFAULT trong script để bỏ.</span>');
         panelBody.appendChild(box);
         panelBody.scrollTop = panelBody.scrollHeight;
-        if (panel.style.display === 'none') panel.style.display = '';
+        var ubBtn = document.getElementById('oc-unblock-btn');
+        if (ubBtn) {
+          ubBtn.addEventListener('click', function () {
+            if (removeFromBlacklist(id)) {
+              clearMissionFailure(id);
+              log('Đang tải lại trang...', 'system');
+              setTimeout(function () {
+                window.location.reload();
+              }, 600);
+            }
+          });
+        }
       } catch (err) {}
     }
     function resolveByCampaign(missionId2) {
