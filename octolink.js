@@ -225,10 +225,7 @@
       window.location.href = MISSION_FALLBACK_URL;
       return;
     }
-    const GITHUB_TOKEN = '',
-      GITHUB_REPO = '',
-      GITHUB_FILE = '',
-      pageUrl = window.location.href,
+    const pageUrl = window.location.href,
       queryParams = new URLSearchParams(window.location.search),
       hostname = window.location.hostname,
       pathSegments = window.location.pathname.split('/').filter(Boolean);
@@ -246,6 +243,8 @@
     var apiOrigin = '';
     var coreCtx = null;
     var demoRetried = false;
+    // true = nhiệm vụ bị chặn, mọi tiến trình phải dừng
+    var missionHalted = false;
     // ==================================================================
     // safeRequest — GM_xmlhttpRequest wrapper + fetch() fallback + timeout
     // Giải quyết: GM_xmlhttpRequest im lặng (không callback) ở một số env
@@ -649,6 +648,236 @@
         }
       } catch (err) {}
       return null;
+    }
+    // ====================================================================
+    // BLACKLIST NHIỆM VỤ — 3 nguồn hợp nhất:
+    //   1. DEFAULT  : hardcode trong script
+    //   2. LOCAL    : máy này tự thêm (thủ công hoặc tự động khi fail)
+    // ====================================================================
+    const BLACKLIST_KEY = 'octo_blacklist_v1';
+    const BLACKLIST_DEFAULT = ['157', '199', '237', '168', '33'];
+    function normalizeBlacklistEntry(value) {
+      return String(value == null ? '' : value)
+        .trim()
+        .toLowerCase()
+        .replace(/\.html?$/, '');
+    }
+    function readLocalBlacklist() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(BLACKLIST_KEY, null);
+        if (raw === null || raw === undefined) raw = localStorage.getItem(BLACKLIST_KEY);
+        if (!raw) return [];
+        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return Array.isArray(parsed) ? parsed.map(normalizeBlacklistEntry).filter(Boolean) : [];
+      } catch (err) {
+        return [];
+      }
+    }
+    function writeLocalBlacklist(list) {
+      var clean = [];
+      for (var i = 0; i < list.length; i++) {
+        var v = normalizeBlacklistEntry(list[i]);
+        if (v && clean.indexOf(v) < 0) clean.push(v);
+      }
+      var text = JSON.stringify(clean);
+      try {
+        if (typeof GM_setValue === 'function') GM_setValue(BLACKLIST_KEY, text);
+      } catch (err) {}
+      try {
+        localStorage.setItem(BLACKLIST_KEY, text);
+      } catch (err) {}
+      return clean;
+    }
+    // Danh sách chặn đầy đủ đang có hiệu lực.
+    function getBlacklist() {
+      var merged = BLACKLIST_DEFAULT.slice();
+      var extra = readLocalBlacklist();
+      for (var i = 0; i < extra.length; i++) {
+        var v = normalizeBlacklistEntry(extra[i]);
+        if (v && merged.indexOf(v) < 0) merged.push(v);
+      }
+      return merged;
+    }
+    // Kiểm tra: khớp mã số thuần, khớp slug đầy đủ, hoặc mã xuất hiện trong tiêu đề tab.
+    function isMissionBlacklisted(id) {
+      var list = getBlacklist();
+      var slug = normalizeBlacklistEntry(id);
+      var numeric = slug.replace(/[^0-9]/g, '');
+      var tabTitle = (document.title || '').toLowerCase().replace(/\s+/g, '');
+      for (var i = 0; i < list.length; i++) {
+        var entry = list[i];
+        if (!entry) continue;
+        if (slug && entry === slug) return entry;
+        if (numeric && entry === numeric) return entry;
+        // chỉ so tiêu đề với mã số thuần, tránh chuỗi ngắn khớp bừa
+        if (/^[0-9]+$/.test(entry) && entry.length >= 2 && tabTitle.includes(entry)) return entry;
+      }
+      return null;
+    }
+    // Thêm vào blacklist local. reason chỉ để ghi log.
+    function addToBlacklist(id, reason) {
+      var slug = normalizeBlacklistEntry(id);
+      if (!slug) return false;
+      if (isMissionBlacklisted(slug)) return false;
+      var list = readLocalBlacklist();
+      list.push(slug);
+      writeLocalBlacklist(list);
+      log(
+        'Đã thêm [' + slug + '] vào danh sách chặn' + (reason ? ' — ' + reason : '') + '.',
+        'warn'
+      );
+      return true;
+    }
+    function removeFromBlacklist(id) {
+      var slug = normalizeBlacklistEntry(id);
+      if (!slug) return false;
+      var list = readLocalBlacklist();
+      var idx = list.indexOf(slug);
+      if (idx < 0) {
+        if (BLACKLIST_DEFAULT.indexOf(slug) >= 0) {
+          log('[' + slug + '] thuộc danh sách mặc định, không thể xoá.', 'warn');
+        }
+        return false;
+      }
+      list.splice(idx, 1);
+      writeLocalBlacklist(list);
+      log('Đã bỏ [' + slug + '] khỏi danh sách chặn cục bộ.', 'success');
+      return true;
+    }
+    // ---- đếm số lần thất bại để tự chặn -------------------------------
+    const FAILCOUNT_KEY = 'octo_failcount_v1';
+    const FAIL_THRESHOLD = 3;
+    function readFailCounts() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(FAILCOUNT_KEY, null);
+        if (raw === null || raw === undefined) raw = localStorage.getItem(FAILCOUNT_KEY);
+        if (!raw) return {};
+        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (err) {
+        return {};
+      }
+    }
+    function writeFailCounts(store) {
+      var text = JSON.stringify(store);
+      try {
+        if (typeof GM_setValue === 'function') GM_setValue(FAILCOUNT_KEY, text);
+      } catch (err) {}
+      try {
+        localStorage.setItem(FAILCOUNT_KEY, text);
+      } catch (err) {}
+    }
+    // Ghi nhận 1 lần thất bại. Đủ FAIL_THRESHOLD lần thì tự chặn.
+    function recordMissionFailure(id, reason) {
+      var slug = normalizeBlacklistEntry(id);
+      if (!slug) return;
+      try {
+        var store = readFailCounts();
+        var rec = store[slug] || { n: 0 };
+        rec.n = (rec.n || 0) + 1;
+        rec.ts = Date.now();
+        rec.reason = reason || rec.reason || '';
+        store[slug] = rec;
+        // giữ tối đa 200 bản ghi
+        var keys = Object.keys(store);
+        if (keys.length > 200) {
+          keys
+            .sort(function (a, b) {
+              return (store[a].ts || 0) - (store[b].ts || 0);
+            })
+            .slice(0, keys.length - 200)
+            .forEach(function (k) {
+              delete store[k];
+            });
+        }
+        writeFailCounts(store);
+        if (rec.n < FAIL_THRESHOLD) {
+          log(
+            'Nhiệm vụ [' + slug + '] thất bại ' + rec.n + '/' + FAIL_THRESHOLD +
+              ' lần' + (reason ? ' (' + reason + ')' : '') + '.',
+            'warn'
+          );
+        } else {
+          addToBlacklist(slug, 'thất bại ' + rec.n + ' lần: ' + (reason || 'không rõ'));
+        }
+      } catch (err) {}
+    }
+    // Nhiệm vụ chạy được -> xoá bộ đếm thất bại.
+    function clearMissionFailure(id) {
+      var slug = normalizeBlacklistEntry(id);
+      if (!slug) return;
+      try {
+        var store = readFailCounts();
+        if (store[slug]) {
+          delete store[slug];
+          writeFailCounts(store);
+        }
+      } catch (err) {}
+    }
+    // ---- menu Tampermonkey: quản lý blacklist -------------------------
+    if (typeof GM_registerMenuCommand === 'function') {
+      try {
+        GM_registerMenuCommand('Xem danh sách chặn', function () {
+          var local = readLocalBlacklist();
+          var msg =
+            'Mặc định: ' +
+            BLACKLIST_DEFAULT.join(', ') +
+            '\nTự thêm (' +
+            local.length +
+            '): ' +
+            (local.length ? local.join(', ') : '(trống)');
+          log('Danh sách chặn — mặc định: ' + BLACKLIST_DEFAULT.join(', '), 'info');
+          log('Danh sách chặn — tự thêm: ' + (local.length ? local.join(', ') : '(trống)'), 'info');
+          alert(msg);
+        });
+        GM_registerMenuCommand('Chặn nhiệm vụ này', function () {
+          if (!missionId) {
+            alert('Không xác định được mã nhiệm vụ trên trang này.');
+            return;
+          }
+          if (addToBlacklist(missionId, 'thêm thủ công')) {
+            alert('Đã chặn: ' + missionId + '\nTải lại trang để áp dụng.');
+          } else {
+            alert(missionId + ' đã nằm trong danh sách chặn.');
+          }
+        });
+        GM_registerMenuCommand('Chặn nhiệm vụ theo mã...', function () {
+          var input = prompt('Nhập mã nhiệm vụ cần chặn (nhiều mã cách nhau bằng dấu phẩy):', '');
+          if (!input) return;
+          var parts = input.split(',');
+          var added = 0;
+          for (var i = 0; i < parts.length; i++) {
+            if (addToBlacklist(parts[i], 'thêm thủ công')) added++;
+          }
+          alert('Đã thêm ' + added + '/' + parts.length + ' mã vào danh sách chặn.');
+        });
+        GM_registerMenuCommand('Bỏ chặn nhiệm vụ này', function () {
+          if (!missionId) {
+            alert('Không xác định được mã nhiệm vụ trên trang này.');
+            return;
+          }
+          if (removeFromBlacklist(missionId)) {
+            alert('Đã bỏ chặn: ' + missionId + '\nTải lại trang để áp dụng.');
+          } else {
+            alert(
+              missionId +
+                ' không nằm trong danh sách tự thêm.\n' +
+                '(Mã mặc định ' +
+                BLACKLIST_DEFAULT.join('/') +
+                ' không thể bỏ chặn.)'
+            );
+          }
+        });
+        GM_registerMenuCommand('Xoá toàn bộ chặn tự thêm', function () {
+          if (!confirm('Xoá tất cả mã đã tự thêm vào danh sách chặn?')) return;
+          writeLocalBlacklist([]);
+          writeFailCounts({});
+          log('Đã xoá danh sách chặn tự thêm và bộ đếm thất bại.', 'success');
+          alert('Đã xoá. Tải lại trang để áp dụng.');
+        });
+      } catch (err) {}
     }
     setStatus('sẵn sàng', 'busy');
     setRail(4);
@@ -1163,22 +1392,42 @@
       campaignCache = [];
       done && done([]);
     }
+    // Chặn cứng: hiện thông báo, khoá panel, KHÔNG cho chạy tiếp bằng bất kỳ đường nào.
+    function haltBlacklisted(id, matchedBy) {
+      missionHalted = true;
+      try {
+        var oldForm = document.getElementById('manual-input-container');
+        if (oldForm && oldForm.parentNode) oldForm.parentNode.removeChild(oldForm);
+      } catch (err) {}
+      log('⛔ Nhiệm vụ [' + id + '] bị CHẶN (khớp: ' + matchedBy + ').', 'error');
+      log('Tiến trình đã dừng. Nhiệm vụ này không được phép chạy.', 'error');
+      setStatus('bị chặn', 'bad');
+      setRail(100);
+      try {
+        var box = document.createElement('div');
+        box.id = 'oc-blocked-box';
+        box.style.cssText =
+          'margin:8px 0 2px;padding:10px 12px;border-radius:10px;' +
+          'background:rgba(251,113,133,.10);border:1px solid rgba(251,113,133,.42);' +
+          'color:#fecdd3;font-size:12px;line-height:1.55';
+        box.innerHTML =
+          '<b style="color:#fb7185">Nhiệm vụ bị chặn</b><br>' +
+          'Mã: <code style="color:#fda4af">' +
+          String(id).replace(/[<>&]/g, '') +
+          '</code> — khớp <code style="color:#fda4af">' +
+          String(matchedBy).replace(/[<>&]/g, '') +
+          '</code><br>' +
+          '<span style="color:#9b93b8">Bỏ chặn qua menu Tampermonkey → "Bỏ chặn nhiệm vụ này".</span>';
+        panelBody.appendChild(box);
+        panelBody.scrollTop = panelBody.scrollHeight;
+        if (panel.style.display === 'none') panel.style.display = '';
+      } catch (err) {}
+    }
     function resolveByCampaign(missionId2) {
-      // --- blacklist nhiệm vụ: khớp mã nhiệm vụ HOẶC tên tab -------------
-      var MISSION_BLACKLIST = [199, 237, 168, 33];
-      var tabTitle = (document.title || '').toLowerCase().replace(/\s+/g, '');
-      var missionCode = String(missionId2 || '')
-        .toLowerCase()
-        .replace(/[^0-9]/g, '');
-      var isBlacklisted = MISSION_BLACKLIST.some(function (id) {
-        var code = String(id);
-        if (missionCode === code) return true;
-        if (tabTitle.includes(code)) return true;
-        return false;
-      });
-      if (isBlacklisted) {
-        log('Nhiệm vụ [' + missionId2 + '] nằm trong danh sách chặn. Bỏ qua.', 'warn');
-        showManualDomainForm();
+      // --- blacklist: default + local tự thêm → CHẶN CỨNG ---------------
+      var blockedBy = isMissionBlacklisted(missionId2);
+      if (blockedBy) {
+        haltBlacklisted(missionId2, blockedBy);
         return;
       }
       // --- tự điền từ nhiệm vụ đã làm trước đó ---------------------------
@@ -1264,129 +1513,16 @@
         }
       });
     }
+    // Không có cache đám mây — chuyển thẳng sang nhập tay.
     function resolveByGithubCache(missionId2) {
-      if (!GITHUB_TOKEN) {
-        return (
-          log('Cache GitHub chưa cấu hình. Nhập tên miền thủ công.', 'info'),
-          showManualDomainForm()
-        );
-      }
-      log('Đang kết nối API thời gian thực để lấy dữ liệu đám mây...', 'system');
-      safeRequest({
-        method: 'GET',
-        url:
-          'https://api.github.com/repos/' +
-          GITHUB_REPO +
-          '/contents/' +
-          GITHUB_FILE +
-          '?t=' +
-          new Date().getTime(),
-        headers: {
-          Authorization: 'token ' + GITHUB_TOKEN,
-          Accept: 'application/vnd.github.v3+json'
-        },
-        onload: function (response) {
-          if (response.status !== 200) {
-            return (
-              log('Lấy dữ liệu thất bại từ GitHub. Kích hoạt nhập thủ công.', 'error'),
-              showManualDomainForm()
-            );
-          }
-          try {
-            var fileMeta = JSON.parse(response.responseText);
-            if (fileMeta.content) {
-              var jsonText = base64ToUtf8(fileMeta.content),
-                cache = JSON.parse(jsonText);
-              if (cache.enabled && cache.redirects && cache.redirects[missionId2]) {
-                var cachedDomain = cache.redirects[missionId2];
-                log('Phát hiện bản lưu đám mây: ' + cachedDomain, 'success');
-                startFromJsconfig(
-                  cachedDomain.startsWith('http') ? cachedDomain : 'https://' + cachedDomain,
-                  'cache',
-                  null
-                );
-              } else {
-                log('Nhiệm vụ mới hoàn toàn. Kích hoạt chế độ nhập thủ công.', 'warn');
-                showManualDomainForm();
-              }
-            } else {
-              log('Cấu trúc file GitHub không hợp lệ.', 'error');
-              showManualDomainForm();
-            }
-          } catch (err) {
-            log('Lỗi phân tích cú pháp dữ liệu JSON.', 'error');
-            showManualDomainForm();
-          }
-        },
-        onerror: function () {
-          log('Mất kết nối với máy chủ API GitHub.', 'error');
-          showManualDomainForm();
-        },
-        ontimeout: function () {
-          log('Quá thời gian kết nối API GitHub.', 'error');
-          showManualDomainForm();
-        }
-      });
-    }
-    function saveDomainToGithub(missionId2, domain) {
-      if (!GITHUB_TOKEN) return;
-      log('Đang đồng bộ hóa dữ liệu lên hệ thống lưu trữ...', 'system');
-      const apiUrl = 'https://api.github.com/repos/' + GITHUB_REPO + '/contents/' + GITHUB_FILE;
-      safeRequest({
-        method: 'GET',
-        url: apiUrl,
-        headers: {
-          Authorization: 'token ' + GITHUB_TOKEN,
-          Accept: 'application/vnd.github.v3+json'
-        },
-        onload: function (response) {
-          if (response.status !== 200) {
-            log('Không thể đọc dữ liệu từ GitHub.', 'error');
-            return;
-          }
-          try {
-            var fileMeta = JSON.parse(response.responseText),
-              jsonText = base64ToUtf8(fileMeta.content),
-              cache = JSON.parse(jsonText);
-            if (!cache.redirects) cache.redirects = {};
-            cache.redirects[missionId2] = domain;
-            var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(cache, null, 2)))),
-              commit = {
-                message: 'Auto Sync: ID ' + missionId2 + ' -> ' + domain,
-                content: encoded,
-                sha: fileMeta.sha
-              };
-            safeRequest({
-              method: 'PUT',
-              url: apiUrl,
-              headers: {
-                Authorization: 'token ' + GITHUB_TOKEN,
-                Accept: 'application/vnd.github.v3+json'
-              },
-              data: JSON.stringify(commit),
-              onload: function (putResponse) {
-                if (putResponse.status === 200 || putResponse.status === 201)
-                  log('Đã cập nhật an toàn vào cơ sở dữ liệu hệ thống.', 'success');
-                else {
-                  log('Cập nhật GitHub thất bại (HTTP ' + putResponse.status + ').', 'error');
-                }
-              },
-              // BUGFIX: PUT fail im lặng vì thiếu onerror/ontimeout
-              onerror: function () {
-                log('Không gửi được dữ liệu lên GitHub (lỗi mạng).', 'error');
-              },
-              ontimeout: function () {
-                log('Gửi dữ liệu lên GitHub quá thời gian chờ.', 'error');
-              }
-            });
-          } catch (err) {
-            log('Lỗi xử lý dữ liệu GitHub: ' + err.message, 'error');
-          }
-        }
-      });
+      if (missionHalted) return;
+      log('Nhiệm vụ mới. Vui lòng nhập tên miền thủ công.', 'info');
+      showManualDomainForm();
     }
     function showManualDomainForm() {
       {
+        // nhiệm vụ bị chặn thì không cho nhập tay để đi đường khác
+        if (missionHalted) return;
         // BUGFIX: form cũ bị ẩn vẫn tồn tại trong DOM -> hiện lại thay vì
         // return sớm (trước đây là dead end, không thể nhập lần 2)
         var oldForm = document.getElementById('manual-input-container');
@@ -1565,6 +1701,7 @@
       });
     }
     function startFromJsconfig(targetUrl, source, unusedArg) {
+      if (missionHalted) return;
       log('Đang kiểm tra giao thức định tuyến tại jsconfig...', 'system');
       var _jsconfigDone = false;
       function handleJsconfigResponse(responseText) {
@@ -1590,8 +1727,9 @@
         log('Mã hóa hợp lệ. Cho phép tiến hành bước tiếp theo.', 'success');
         var domain = targetUrl.replace(/https?:\/\//i, '').replace(/\/$/, '');
         rememberCampaign(missionId, { domain: domain });
+        // nhiệm vụ chạy được -> reset bộ đếm thất bại
+        clearMissionFailure(missionId);
         if (source === 'manual') {
-          saveDomainToGithub(missionId, domain);
           var el = document.getElementById('manual-input-container');
           if (el && el.parentNode) el.parentNode.removeChild(el);
         }
@@ -1652,6 +1790,13 @@
       });
     }
     function octolinkCheckDevice(alias) {
+      if (missionHalted) return;
+      // alias trên octolink cũng phải qua blacklist
+      var aliasBlocked = isMissionBlacklisted(alias);
+      if (aliasBlocked) {
+        haltBlacklisted(alias, aliasBlocked);
+        return;
+      }
       if (!alias) return showManualDomainForm();
       log('Đang gửi yêu cầu mở cổng tới Octolink...', 'system');
       safeRequest({
@@ -1679,6 +1824,7 @@
           } else {
             var reason = (json && json.message) || 'Không thể mở cổng kiểm tra.';
             log('Octolink từ chối: ' + reason, 'error');
+            recordMissionFailure(alias, 'octolink từ chối: ' + reason);
             showManualDomainForm();
           }
         },
@@ -2499,12 +2645,14 @@
         });
     }
     function checkJob(rdToken, targetUrl, attempt, source) {
+      if (missionHalted) return;
       if (attempt > 3)
         return (
           log(
             'Tên miền lưu trữ đã hết hạn hoặc bị từ chối. Vui lòng cập nhật tên miền mới.',
             'error'
           ),
+          recordMissionFailure(missionId, 'hết 4 lần thử checkJob'),
           showManualDomainForm()
         );
       apiOrigin = originOf(targetUrl);
