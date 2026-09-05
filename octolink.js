@@ -363,8 +363,118 @@
       for (var cookieName in cookieJar) cookiePairs.push(cookieName + '=' + cookieJar[cookieName]);
       cookieHeader = cookiePairs.join(';\x20') + (cookiePairs.length ? ';\x20' : '');
     }
+    // ==================================================================
+    // USER-AGENT — phải khớp với fingerprint gửi kèm.
+    //
+    // Trước đây hardcode UA Android Mobile Chrome/148 trong khi
+    // fingerprint lại khai platform=Win32, mobile=false, screen=1920x1080.
+    // Server đối chiếu UA với fingerprint, lệch nhau là bị đánh dấu —
+    // và mức độ chặt tay khác nhau giữa Chrome và Edge (Chrome gửi thêm
+    // Sec-CH-UA client hints do trình duyệt tự thêm, không sửa được từ
+    // userscript, nên UA giả càng dễ lộ). Nay dùng UA thật của máy.
+    // ==================================================================
+    var REAL_UA = '';
+    try {
+      REAL_UA = String(navigator.userAgent || '');
+    } catch (err) {}
     const USER_AGENT =
-      'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36';
+      REAL_UA ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+    var IS_MOBILE_UA = /Android|iPhone|iPad|iPod|Mobile/i.test(USER_AGENT);
+    // ==================================================================
+    // FINGERPRINT NHẤT QUÁN
+    //
+    // Script spoof cũ hardcode platform=Win32, deviceMemory=8,
+    // hardwareConcurrency=4, maxTouchPoints ngẫu nhiên; directjscd
+    // hardcode mobile=false. Trên Chrome, trình duyệt tự gửi kèm
+    // Sec-CH-UA-Platform / Sec-CH-UA-Mobile mà userscript KHÔNG sửa
+    // được, nên server đối chiếu thấy lệch với fingerprint rồi chặn.
+    // Edge gửi client hints khác nên lọt. Cách sửa: dùng giá trị THẬT.
+    // ==================================================================
+    function jsLiteral(value) {
+      return JSON.stringify(value == null ? '' : value);
+    }
+    var FP_REAL = (function () {
+      var nav = {};
+      try {
+        nav = navigator || {};
+      } catch (err) {}
+      function num(value, fallback) {
+        var n = parseInt(value, 10);
+        return isNaN(n) ? fallback : n;
+      }
+      var scr = { width: 1920, height: 1080 };
+      try {
+        if (screen && screen.width) scr = screen;
+      } catch (err) {}
+      return {
+        platform: String(nav.platform || (IS_MOBILE_UA ? 'Linux armv8l' : 'Win32')),
+        deviceMemory: num(nav.deviceMemory, 8),
+        hardwareConcurrency: num(nav.hardwareConcurrency, 4),
+        maxTouchPoints: num(nav.maxTouchPoints, IS_MOBILE_UA ? 5 : 0),
+        language: String(nav.language || 'vi'),
+        languages: (function () {
+          try {
+            if (nav.languages && nav.languages.length)
+              return Array.prototype.slice.call(nav.languages);
+          } catch (err) {}
+          return ['vi-VN', 'vi', 'en-US', 'en'];
+        })(),
+        mobile: IS_MOBILE_UA,
+        screen: (scr.width || 1920) + 'x' + (scr.height || 1080)
+      };
+    })();
+    function buildSpoofScript() {
+      return (
+        '(function(){function _def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},' +
+        'configurable:true});return;}catch(e){}try{var p=Object.getPrototypeOf(o);if(p){' +
+        'Object.defineProperty(p,k,{get:function(){return v;},configurable:true});}}catch(e2){}}' +
+        'try{var _n=navigator,_c=document.createElement("canvas");_c.width=1280;_c.height=720;' +
+        'var _ctx=_c.getContext("2d");_ctx.textBaseline="top";_ctx.font="14px Arial";' +
+        '_ctx.fillStyle="#f60";_ctx.fillRect(125,1,62,20);_ctx.fillStyle="#069";' +
+        '_ctx.fillText("Fingerprint "+Date.now(),2,15);_ctx.fillStyle="rgba(102,204,0,0.7)";' +
+        '_ctx.fillText("Spoofed Canvas",4,45);var _cv=_c.toDataURL();' +
+        'HTMLCanvasElement.prototype.toDataURL=function(){return _cv;};' +
+        'HTMLCanvasElement.prototype.toBlob=function(cb,type,enc){_c.toBlob(cb,type,enc);};' +
+        // Giá trị THẬT của máy — phải khớp UA và client hints browser gửi
+        '_def(_n,"deviceMemory",' +
+        FP_REAL.deviceMemory +
+        ');_def(_n,"hardwareConcurrency",' +
+        FP_REAL.hardwareConcurrency +
+        ');_def(_n,"maxTouchPoints",' +
+        FP_REAL.maxTouchPoints +
+        ');_def(_n,"language",' +
+        jsLiteral(FP_REAL.language) +
+        ');_def(_n,"languages",' +
+        JSON.stringify(FP_REAL.languages) +
+        ');_def(_n,"platform",' +
+        jsLiteral(FP_REAL.platform) +
+        ');try{Object.defineProperty(document,"referrer",{get:function(){' +
+        'return "https://www.google.com/";},configurable:true});' +
+        'document.cookie="from_google=true; path=/";}catch(e){}}catch(e){}})();'
+      );
+    }
+    function buildDirectjscdScript() {
+      return (
+        '(function(){try{var _tm=function(){var a=[],i;for(i=0;i<3;i++){' +
+        'a.push(String(1000+Math.floor(Math.random()*8000)));}return a.join(",");};' +
+        'var _tz="Asia/Saigon";try{_tz=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){}' +
+        'var _ua=(window.__OCTO_UA||navigator.userAgent||"");' +
+        'window.directjscd={w:1,d:1,wd:0,hc:' +
+        FP_REAL.hardwareConcurrency +
+        ',dm:' +
+        FP_REAL.deviceMemory +
+        ',ua:_ua,lang:(navigator.language||' +
+        jsLiteral(FP_REAL.language) +
+        '),tz:_tz,cv:"1158bb7a3da06a7a",tm:_tm(),it:0,te:0,mobile:' +
+        (FP_REAL.mobile ? 'true' : 'false') +
+        ',cookies:true,screen:((screen&&screen.width)||1920)+"x"+((screen&&screen.height)||1080),' +
+        'userscript:0,userscript_score:0,gm_apis:false,extension_runtime:false,' +
+        'greasemonkey:false,tampermonkey:false,violentmonkey:false,' +
+        'layered_userscript:{score:0,detections:[],by_kind:{},kinds:[]},timing:{score:0}};' +
+        '}catch(e){}})();'
+      );
+    }
     if (queryParams.has('redirect_to_octo')) {
       {
         const redirectTarget = decodeURIComponent(queryParams.get('redirect_to_octo'));
@@ -913,6 +1023,8 @@
     // ---- đếm số lần thất bại để tự chặn -------------------------------
     const FAILCOUNT_KEY = 'octo_failcount_v1';
     const FAIL_THRESHOLD = 3;
+    // Server bảo "chờ chặng" không phải lỗi — cho thử nhiều lần hơn hẳn.
+    const CONTINUE_MAX_WAIT_ROUNDS = 20;
     function readFailCounts() {
       try {
         var raw = null;
@@ -3001,13 +3113,11 @@
           frameDoc.close();
           if (SPOOF_ENABLED) {
             var scriptEl = frameDoc.createElement('script');
-            scriptEl.textContent =
-              '(function(){function _r(a){return a[Math.floor(Math.random()*a.length)];}function _def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},configurable:true});return;}catch(e){}try{var p=Object.getPrototypeOf(o);if(p){Object.defineProperty(p,k,{get:function(){return v;},configurable:true});}}catch(e2){}}try{var _w=window,_n=navigator,_s=screen,_c=document.createElement("canvas");_c.width=1280;_c.height=720;var _ctx=_c.getContext("2d");_ctx.textBaseline="top";_ctx.font="14px Arial";_ctx.fillStyle="#f60";_ctx.fillRect(125,1,62,20);_ctx.fillStyle="#069";_ctx.fillText("Fingerprint "+Date.now(),2,15);_ctx.fillStyle="rgba(102,204,0,0.7)";_ctx.fillText("Spoofed Canvas",4,45);var _cv=_c.toDataURL();var _cvHash="1158bb7a3da06a7a";var _origToDataURL=HTMLCanvasElement.prototype.toDataURL;HTMLCanvasElement.prototype.toDataURL=function(){return _cv;};var _origToBlob=HTMLCanvasElement.prototype.toBlob;HTMLCanvasElement.prototype.toBlob=function(cb,type,enc){_c.toBlob(cb,type,enc);};var _origGetContext=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(type,attr){var ctx=_origGetContext.call(this,type,attr);if(type==="2d"){var _origFillText=ctx.fillText;ctx.fillText=function(){return _origFillText.apply(this,arguments);};}return ctx;};_def(_n,"deviceMemory",8);_def(_n,"hardwareConcurrency",4);_def(_n,"maxTouchPoints",_r([0,0,0,5]));_def(_n,"language","vi");_def(_n,"languages",["vi-VN","vi","en-US","en"]);_def(_n,"platform","Win32");try{Object.defineProperty(document,"referrer",{get:function(){return "https://www.google.com/";},configurable:true});document.cookie="from_google=true; path=/";}catch(e){}}catch(e){}})();';
+            scriptEl.textContent = buildSpoofScript();
             frameDoc.body.appendChild(scriptEl);
           }
           var scriptEl2 = frameDoc.createElement('script');
-          scriptEl2.textContent =
-            '(function(){try{var _tm=function(){var a=[],i;for(i=0;i<3;i++){a.push(String(1000+Math.floor(Math.random()*8000)));}return a.join(",");};var _tz="Asia/Saigon";try{_tz=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){}var _ua=(window.__OCTO_UA||navigator.userAgent||"");window.directjscd={w:1,d:1,wd:0,hc:4,dm:8,ua:_ua,lang:(navigator.language||"vi"),tz:_tz,cv:"1158bb7a3da06a7a",tm:_tm(),it:0,te:0,mobile:false,cookies:true,screen:((screen&&screen.width)||1920)+"x"+((screen&&screen.height)||1080),userscript:0,userscript_score:0,gm_apis:false,extension_runtime:false,greasemonkey:false,tampermonkey:false,violentmonkey:false,layered_userscript:{score:0,detections:[],by_kind:{},kinds:[]},timing:{score:0}};}catch(e){}})();';
+          scriptEl2.textContent = buildDirectjscdScript();
           frameDoc.body.appendChild(scriptEl2);
           var scriptEl3 = frameDoc.createElement('script');
           scriptEl3.textContent =
@@ -3225,6 +3335,7 @@
                           domain: originOf(targetUrl).replace(/^https?:\/\//i, ''),
                           countRun: true
                         }),
+                        clearMissionFailure(missionId),
                         log('Mở khóa thành công!', 'success')),
                         setTimeout(function () {
                           window.location.href =
@@ -3325,6 +3436,7 @@
                               guardHeaders,
                               w,
                               step,
+                              0,
                               0
                             );
                           }, 1000));
@@ -3363,15 +3475,81 @@
         }
       });
     }
-    function sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt) {
-      if (attempt > 3) return log('Phát sinh lỗi vượt chặng. Tạm dừng tiến trình.', 'error');
-      log('Gửi /check/continue (chặng ' + step + ', lần ' + (attempt + 1) + '/4)...', 'system');
-      var guardHeaders = buildGuardHeaders(coreWindow, '/check/continue', payload);
+    // waitRound: số lần server chủ động bảo "chờ chặng" — KHÔNG phải lỗi, nên
+    // đếm riêng với hạn cao hơn nhiều so với attempt (lỗi thật: mạng/giải mã).
+    function sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt, waitRound) {
+      if (missionHalted) return;
+      waitRound = waitRound || 0;
+      if (attempt > 3)
+        return (
+          log('Phát sinh lỗi vượt chặng. Tạm dừng tiến trình.', 'error'),
+          recordMissionFailure(missionId, 'lỗi continue chặng ' + step)
+        );
+      if (waitRound > CONTINUE_MAX_WAIT_ROUNDS)
+        return (
+          log(
+            'Server vẫn báo chờ sau ' + waitRound + ' lần thử. Tạm dừng tiến trình.',
+            'error'
+          ),
+          recordMissionFailure(missionId, 'server chờ mãi ở chặng ' + step)
+        );
+      // Payload mang fingerprint + mốc thời gian, dùng lại bản cũ dễ bị từ chối.
+      var freshPayload = payload;
+      try {
+        if (coreWindow && typeof coreWindow.__b110671 === 'function') {
+          var regenerated = coreWindow.__b110671();
+          if (regenerated) freshPayload = regenerated;
+        }
+      } catch (err) {}
+      log(
+        'Gửi /check/continue (chặng ' +
+          step +
+          ', lần ' +
+          (attempt + 1) +
+          '/4' +
+          (waitRound ? ', chờ ' + waitRound + '/' + CONTINUE_MAX_WAIT_ROUNDS : '') +
+          ')...',
+        'system'
+      );
+      var guardHeaders = buildGuardHeaders(coreWindow, '/check/continue', freshPayload);
+      // Server bảo chờ -> nghỉ theo job.wait, tăng dần, không tính là lỗi.
+      function retryAfterWait(job) {
+        var serverWait = job && parseInt(job.wait, 10);
+        var delay = serverWait > 0 ? serverWait * 1000 : 0;
+        if (!delay) delay = Math.min(30000, 5000 + waitRound * 2500);
+        var reason = (job && job.message) || 'chưa đủ thời gian chặng';
+        log(
+          'Server báo chờ: ' +
+            reason +
+            ' — thử lại sau ' +
+            Math.round(delay / 1000) +
+            's (' +
+            (waitRound + 1) +
+            '/' +
+            CONTINUE_MAX_WAIT_ROUNDS +
+            ')',
+          'warn'
+        );
+        setStatus('chờ chặng ' + step, 'busy');
+        setTimeout(function () {
+          sendContinue(
+            rdToken,
+            targetUrl,
+            freshPayload,
+            headers,
+            coreWindow,
+            step,
+            attempt,
+            waitRound + 1
+          );
+        }, delay);
+      }
       postBinary(
         'https://octolink.vip/check/continue',
-        payload,
+        freshPayload,
         guardHeaders,
         function (result2) {
+          if (missionHalted) return;
           var job = null,
             body = result2.response;
           try {
@@ -3381,7 +3559,16 @@
             return (
               log('Phản hồi rỗng (Thử lại ' + (attempt + 1) + '/4)...', 'warn'),
               setTimeout(function () {
-                sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt + 1);
+                sendContinue(
+                  rdToken,
+                  targetUrl,
+                  freshPayload,
+                  headers,
+                  coreWindow,
+                  step,
+                  attempt + 1,
+                  waitRound
+                );
               }, 3000)
             );
           }
@@ -3401,10 +3588,34 @@
           }
           if (isDecoy)
             return (
-              log('Continue bị server trả mồi - chờ và thử lại...', 'warn'),
+              log('Continue bị server trả mồi - đăng ký lại fp và chờ...', 'warn'),
               setTimeout(function () {
-                sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt + 1);
-              }, 5000)
+                try {
+                  registerRawFingerprint(coreWindow, function () {
+                    sendContinue(
+                      rdToken,
+                      targetUrl,
+                      freshPayload,
+                      headers,
+                      coreWindow,
+                      step,
+                      attempt + 1,
+                      waitRound
+                    );
+                  });
+                } catch (err) {
+                  sendContinue(
+                    rdToken,
+                    targetUrl,
+                    freshPayload,
+                    headers,
+                    coreWindow,
+                    step,
+                    attempt + 1,
+                    waitRound
+                  );
+                }
+              }, 6000)
             );
           if (body.length > 100) {
             var DECOY_TEXT2 = 'co trinh khong ma reverse vay em dung dung AI LLM de reverse',
@@ -3437,7 +3648,16 @@
             return (
               log('Xử lý tiếp tục lỗi (Thử lại ' + (attempt + 1) + '/4)...', 'warn'),
               setTimeout(function () {
-                sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt + 1);
+                sendContinue(
+                  rdToken,
+                  targetUrl,
+                  freshPayload,
+                  headers,
+                  coreWindow,
+                  step,
+                  attempt + 1,
+                  waitRound
+                );
               }, 3000)
             );
           if (job.status === 'finish') {
@@ -3448,33 +3668,50 @@
                           domain: originOf(targetUrl).replace(/^https?:\/\//i, ''),
                           countRun: true
                         }),
+                        clearMissionFailure(missionId),
                         log('Mở khóa thành công!', 'success'));
             setTimeout(function () {
               window.location.href =
                 originOf(targetUrl) + '/?redirect_to_octo=' + encodeURIComponent(job.url);
             }, 1000);
+          } else if (job.status === 'success') {
+            log('Hoàn tất chặng ' + step + ', tiếp tục di chuyển...', 'success');
+            clearMissionFailure(missionId);
+            setTimeout(function () {
+              checkJob(rdToken, targetUrl, 0, 'cache');
+            }, 8000);
           } else {
-            job.status === 'success'
-              ? (log('Hoàn tất chặng ' + step + ', tiếp tục di chuyển...', 'success'),
-                setTimeout(function () {
-                  checkJob(rdToken, targetUrl, 0, 'cache');
-                }, 8000))
-              : (log('Server báo chờ chặng (Thử lại ' + (attempt + 1) + '/4)...', 'warn'),
-                setTimeout(function () {
-                  sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt + 1);
-                }, 3000));
+            retryAfterWait(job);
           }
         },
         function () {
           log('Mất kết nối continue (Thử lại ' + (attempt + 1) + '/4)...', 'error');
           setTimeout(function () {
-            sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt + 1);
+            sendContinue(
+              rdToken,
+              targetUrl,
+              freshPayload,
+              headers,
+              coreWindow,
+              step,
+              attempt + 1,
+              waitRound
+            );
           }, 3000);
         },
         function () {
           log('Hết hạn continue (Thử lại ' + (attempt + 1) + '/4)...', 'error');
           setTimeout(function () {
-            sendContinue(rdToken, targetUrl, payload, headers, coreWindow, step, attempt + 1);
+            sendContinue(
+              rdToken,
+              targetUrl,
+              freshPayload,
+              headers,
+              coreWindow,
+              step,
+              attempt + 1,
+              waitRound
+            );
           }, 3000);
         }
       );
