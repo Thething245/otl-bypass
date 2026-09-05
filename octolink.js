@@ -378,11 +378,11 @@
         return;
       }
     }
-    const isGuideHost =
-        hostname.includes('linkhuongdan.online') || hostname.includes('totreview.com'),
-      hasCsrfForm = document.querySelector('input[name="_csrfToken"]') !== null,
-      ORIGINAL_LINK_RE = /<a[^>]+href=["']([^"']+)["'][^>]*>Link\s*Gốc<\/a>/i,
-      originalLinkMatch = document.body.innerHTML.match(ORIGINAL_LINK_RE);
+    var isGuideHost =
+      hostname.includes('linkhuongdan.online') || hostname.includes('totreview.com');
+    var hasCsrfForm = document.querySelector('input[name="_csrfToken"]') !== null;
+    var ORIGINAL_LINK_RE = /<a[^>]+href=["']([^"']+)["'][^>]*>Link\s*Gốc<\/a>/i;
+    var originalLinkMatch = document.body.innerHTML.match(ORIGINAL_LINK_RE);
     if (!isGuideHost && !hasCsrfForm && !originalLinkMatch && !hostname.includes('octolink.vip'))
       return;
     let styleEl = document.createElement('style');
