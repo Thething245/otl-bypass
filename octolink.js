@@ -474,6 +474,9 @@
       'background:rgba(251,113,133,.13);border:1px solid rgba(251,113,133,.32);color:#fecdd3}\n' +
       '.oc-bl-tag.oc-bl-fixed{background:rgba(255,255,255,.06);' +
       'border-color:rgba(255,255,255,.12);color:var(--oc-dim)}\n' +
+      '.oc-bl-tag.oc-bl-off{background:rgba(52,211,153,.13);' +
+      'border-color:rgba(52,211,153,.34);color:#a7f3d0;text-decoration:line-through;' +
+      'text-decoration-color:rgba(167,243,208,.5)}\n' +
       '.oc-bl-tag.oc-bl-cur{background:rgba(168,85,247,.18);' +
       'border-color:rgba(168,85,247,.55);color:#e9d5ff}\n' +
       '.oc-bl-x{cursor:pointer;font-size:13px;line-height:1;opacity:.65;' +
@@ -715,8 +718,10 @@
     // BLACKLIST NHIỆM VỤ — 3 nguồn hợp nhất:
     //   1. DEFAULT  : hardcode trong script
     //   2. LOCAL    : máy này tự thêm (thủ công hoặc tự động khi fail)
+    //   3. ALLOW    : mã người dùng chủ động bỏ chặn, thắng cả DEFAULT
     // ====================================================================
     const BLACKLIST_KEY = 'octo_blacklist_v1';
+    const ALLOWLIST_KEY = 'octo_allowlist_v1';
     const BLACKLIST_DEFAULT = ['157', '199', '237', '168', '33'];
     function normalizeBlacklistEntry(value) {
       return String(value == null ? '' : value)
@@ -751,18 +756,63 @@
       } catch (err) {}
       return clean;
     }
-    // Danh sách chặn đầy đủ đang có hiệu lực.
+    // ---- allowlist: ghi đè cả mã mặc định -----------------------------
+    function readAllowlist() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(ALLOWLIST_KEY, null);
+        if (raw === null || raw === undefined) raw = localStorage.getItem(ALLOWLIST_KEY);
+        if (!raw) return [];
+        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return Array.isArray(parsed) ? parsed.map(normalizeBlacklistEntry).filter(Boolean) : [];
+      } catch (err) {
+        return [];
+      }
+    }
+    function writeAllowlist(list) {
+      var clean = [];
+      for (var i = 0; i < list.length; i++) {
+        var v = normalizeBlacklistEntry(list[i]);
+        if (v && clean.indexOf(v) < 0) clean.push(v);
+      }
+      var text = JSON.stringify(clean);
+      try {
+        if (typeof GM_setValue === 'function') GM_setValue(ALLOWLIST_KEY, text);
+      } catch (err) {}
+      try {
+        localStorage.setItem(ALLOWLIST_KEY, text);
+      } catch (err) {}
+      return clean;
+    }
+    // Mã này có đang được người dùng cho phép chạy không?
+    function isAllowlisted(id) {
+      var allow = readAllowlist();
+      if (!allow.length) return false;
+      var slug = normalizeBlacklistEntry(id);
+      var numeric = slug.replace(/[^0-9]/g, '');
+      for (var i = 0; i < allow.length; i++) {
+        if (allow[i] === slug) return true;
+        if (numeric && allow[i] === numeric) return true;
+      }
+      return false;
+    }
+    // Danh sách chặn đầy đủ đang có hiệu lực (đã trừ allowlist).
     function getBlacklist() {
-      var merged = BLACKLIST_DEFAULT.slice();
-      var extra = readLocalBlacklist();
-      for (var i = 0; i < extra.length; i++) {
-        var v = normalizeBlacklistEntry(extra[i]);
-        if (v && merged.indexOf(v) < 0) merged.push(v);
+      var allow = readAllowlist();
+      var merged = [];
+      var all = BLACKLIST_DEFAULT.concat(readLocalBlacklist());
+      for (var i = 0; i < all.length; i++) {
+        var v = normalizeBlacklistEntry(all[i]);
+        if (!v || merged.indexOf(v) >= 0) continue;
+        if (allow.indexOf(v) >= 0) continue;
+        merged.push(v);
       }
       return merged;
     }
     // Kiểm tra: khớp mã số thuần, khớp slug đầy đủ, hoặc mã xuất hiện trong tiêu đề tab.
     function isMissionBlacklisted(id) {
+      // người dùng đã chủ động bỏ chặn -> luôn cho chạy
+      if (isAllowlisted(id)) return null;
       var list = getBlacklist();
       var slug = normalizeBlacklistEntry(id);
       var numeric = slug.replace(/[^0-9]/g, '');
@@ -778,34 +828,67 @@
       return null;
     }
     // Thêm vào blacklist local. reason chỉ để ghi log.
+    // Chặn lại thì bỏ mã khỏi allowlist trước.
     function addToBlacklist(id, reason) {
       var slug = normalizeBlacklistEntry(id);
       if (!slug) return false;
-      if (isMissionBlacklisted(slug)) return false;
+      var allow = readAllowlist();
+      var allowIdx = allow.indexOf(slug);
+      var wasAllowed = allowIdx >= 0;
+      if (wasAllowed) {
+        allow.splice(allowIdx, 1);
+        writeAllowlist(allow);
+      }
+      // đã bị chặn sẵn (và không phải vừa bỏ khỏi allowlist) -> không làm gì
+      if (!wasAllowed && isMissionBlacklisted(slug)) return false;
       var list = readLocalBlacklist();
-      list.push(slug);
-      writeLocalBlacklist(list);
+      if (list.indexOf(slug) < 0 && BLACKLIST_DEFAULT.indexOf(slug) < 0) {
+        list.push(slug);
+        writeLocalBlacklist(list);
+      }
       log(
         'Đã thêm [' + slug + '] vào danh sách chặn' + (reason ? ' — ' + reason : '') + '.',
         'warn'
       );
       return true;
     }
+    // Bỏ chặn. Mã mặc định không xoá được nên đưa vào allowlist để ghi đè.
     function removeFromBlacklist(id) {
       var slug = normalizeBlacklistEntry(id);
       if (!slug) return false;
+      var changed = false;
       var list = readLocalBlacklist();
       var idx = list.indexOf(slug);
-      if (idx < 0) {
-        if (BLACKLIST_DEFAULT.indexOf(slug) >= 0) {
-          log('[' + slug + '] thuộc danh sách mặc định, không thể xoá.', 'warn');
-        }
-        return false;
+      if (idx >= 0) {
+        list.splice(idx, 1);
+        writeLocalBlacklist(list);
+        changed = true;
       }
-      list.splice(idx, 1);
-      writeLocalBlacklist(list);
-      log('Đã bỏ [' + slug + '] khỏi danh sách chặn cục bộ.', 'success');
-      return true;
+      // mã mặc định, hoặc khớp qua mã số / tiêu đề tab -> cần allowlist
+      var stillBlocked = isMissionBlacklisted(slug);
+      if (stillBlocked) {
+        var allow = readAllowlist();
+        if (allow.indexOf(slug) < 0) {
+          allow.push(slug);
+          writeAllowlist(allow);
+        }
+        // mã mặc định khớp qua số (vd slug 'abc-199' vs default '199')
+        var numeric = slug.replace(/[^0-9]/g, '');
+        if (numeric && numeric !== slug && allow.indexOf(numeric) < 0) {
+          if (BLACKLIST_DEFAULT.indexOf(numeric) >= 0 || stillBlocked === numeric) {
+            allow.push(numeric);
+            writeAllowlist(allow);
+          }
+        }
+        changed = true;
+        log('Đã bỏ chặn [' + slug + '] (ghi đè danh sách mặc định).', 'success');
+        return true;
+      }
+      if (changed) {
+        log('Đã bỏ [' + slug + '] khỏi danh sách chặn.', 'success');
+        return true;
+      }
+      return false;
     }
     // ---- đếm số lần thất bại để tự chặn -------------------------------
     const FAILCOUNT_KEY = 'octo_failcount_v1';
@@ -888,17 +971,33 @@
     }
     function buildBlacklistTags() {
       var curSlug = normalizeBlacklistEntry(missionId);
+      var allow = readAllowlist();
+      // --- nhóm mặc định: có thể bật/tắt qua allowlist -----------------
       var fixed = BLACKLIST_DEFAULT.map(function (id) {
         var isCur = curSlug && (curSlug === id || curSlug.replace(/[^0-9]/g, '') === id);
+        var isOff = allow.indexOf(id) >= 0;
         return (
-          '<span class="oc-bl-tag oc-bl-fixed' +
+          '<span class="oc-bl-tag' +
+          (isOff ? ' oc-bl-off' : ' oc-bl-fixed') +
           (isCur ? ' oc-bl-cur' : '') +
-          '" title="Mã mặc định, không xoá được">' +
+          '" title="' +
+          (isOff ? 'Đang tắt — bấm ↻ để chặn lại' : 'Mặc định — bấm × để bỏ chặn') +
+          '">' +
           escapeHtml(id) +
           (isCur ? ' ←' : '') +
-          '</span>'
+          '<span class="oc-bl-x" data-bl-' +
+          (isOff ? 'on' : 'del') +
+          '="' +
+          escapeHtml(id) +
+          '" title="' +
+          (isOff ? 'Chặn lại ' : 'Bỏ chặn ') +
+          escapeHtml(id) +
+          '">' +
+          (isOff ? '↻' : '×') +
+          '</span></span>'
         );
       }).join('');
+      // --- nhóm tự thêm ------------------------------------------------
       var local = readLocalBlacklist();
       var localHtml = local.length
         ? local
@@ -919,9 +1018,36 @@
             })
             .join('')
         : '<span class="oc-bl-empty">chưa thêm mã nào</span>';
+      // --- nhóm đã bỏ chặn ngoài danh sách mặc định --------------------
+      var extraAllow = allow.filter(function (id) {
+        return BLACKLIST_DEFAULT.indexOf(id) < 0;
+      });
+      var allowHtml = extraAllow.length
+        ? '<div class="oc-bl-sect">Đã bỏ chặn (' +
+          extraAllow.length +
+          ')</div><div class="oc-bl-tags">' +
+          extraAllow
+            .map(function (id) {
+              return (
+                '<span class="oc-bl-tag oc-bl-off" title="Đang cho phép chạy">' +
+                escapeHtml(id) +
+                '<span class="oc-bl-x" data-bl-on="' +
+                escapeHtml(id) +
+                '" title="Chặn lại ' +
+                escapeHtml(id) +
+                '">↻</span></span>'
+              );
+            })
+            .join('') +
+          '</div>'
+        : '';
+      var offCount = BLACKLIST_DEFAULT.filter(function (id) {
+        return allow.indexOf(id) >= 0;
+      }).length;
       return (
         '<div class="oc-bl-sect">Mặc định (' +
         BLACKLIST_DEFAULT.length +
+        (offCount ? ' · ' + offCount + ' đang tắt' : '') +
         ')</div><div class="oc-bl-tags">' +
         fixed +
         '</div>' +
@@ -929,7 +1055,8 @@
         local.length +
         ')</div><div class="oc-bl-tags" id="oc-bl-local">' +
         localHtml +
-        '</div>'
+        '</div>' +
+        allowHtml
       );
     }
     function refreshBlacklistPanel() {
@@ -939,11 +1066,29 @@
       bindBlacklistDeletes();
     }
     function bindBlacklistDeletes() {
-      var nodes = document.querySelectorAll('#oc-bl-panel [data-bl-del]');
-      for (var i = 0; i < nodes.length; i++) {
-        nodes[i].addEventListener('click', function () {
+      var delNodes = document.querySelectorAll('#oc-bl-panel [data-bl-del]');
+      for (var i = 0; i < delNodes.length; i++) {
+        delNodes[i].addEventListener('click', function () {
           var id = this.getAttribute('data-bl-del');
-          if (removeFromBlacklist(id)) refreshBlacklistPanel();
+          if (removeFromBlacklist(id)) {
+            clearMissionFailure(id);
+            refreshBlacklistPanel();
+            var curSlug = normalizeBlacklistEntry(missionId);
+            var target = normalizeBlacklistEntry(id);
+            if (
+              missionHalted &&
+              (curSlug === target || curSlug.replace(/[^0-9]/g, '') === target)
+            ) {
+              log('Đã bỏ chặn nhiệm vụ đang mở — tải lại trang để chạy.', 'info');
+            }
+          }
+        });
+      }
+      var onNodes = document.querySelectorAll('#oc-bl-panel [data-bl-on]');
+      for (var j = 0; j < onNodes.length; j++) {
+        onNodes[j].addEventListener('click', function () {
+          var id = this.getAttribute('data-bl-on');
+          if (addToBlacklist(id, 'chặn lại từ bảng điều khiển')) refreshBlacklistPanel();
         });
       }
     }
@@ -1023,15 +1168,25 @@
       try {
         GM_registerMenuCommand('Xem danh sách chặn', function () {
           var local = readLocalBlacklist();
+          var allow = readAllowlist();
+          var active = getBlacklist();
           var msg =
-            'Mặc định: ' +
+            'Đang chặn (' +
+            active.length +
+            '): ' +
+            (active.length ? active.join(', ') : '(trống)') +
+            '\n\nMặc định: ' +
             BLACKLIST_DEFAULT.join(', ') +
             '\nTự thêm (' +
             local.length +
             '): ' +
-            (local.length ? local.join(', ') : '(trống)');
-          log('Danh sách chặn — mặc định: ' + BLACKLIST_DEFAULT.join(', '), 'info');
-          log('Danh sách chặn — tự thêm: ' + (local.length ? local.join(', ') : '(trống)'), 'info');
+            (local.length ? local.join(', ') : '(trống)') +
+            '\nĐã bỏ chặn (' +
+            allow.length +
+            '): ' +
+            (allow.length ? allow.join(', ') : '(trống)');
+          log('Đang chặn: ' + (active.length ? active.join(', ') : '(trống)'), 'info');
+          if (allow.length) log('Đã bỏ chặn: ' + allow.join(', '), 'info');
           alert(msg);
         });
         GM_registerMenuCommand('Chặn nhiệm vụ này', function () {
@@ -1061,23 +1216,46 @@
             return;
           }
           if (removeFromBlacklist(missionId)) {
+            clearMissionFailure(missionId);
             alert('Đã bỏ chặn: ' + missionId + '\nTải lại trang để áp dụng.');
           } else {
-            alert(
-              missionId +
-                ' không nằm trong danh sách tự thêm.\n' +
-                '(Mã mặc định ' +
-                BLACKLIST_DEFAULT.join('/') +
-                ' không thể bỏ chặn.)'
-            );
+            alert(missionId + ' không nằm trong danh sách chặn.');
           }
         });
-        GM_registerMenuCommand('Xoá toàn bộ chặn tự thêm', function () {
-          if (!confirm('Xoá tất cả mã đã tự thêm vào danh sách chặn?')) return;
+        GM_registerMenuCommand('Bỏ chặn theo mã...', function () {
+          var input = prompt(
+            'Nhập mã cần bỏ chặn (kể cả mã mặc định ' +
+              BLACKLIST_DEFAULT.join('/') +
+              ', nhiều mã cách nhau bằng dấu phẩy):',
+            ''
+          );
+          if (!input) return;
+          var parts = input.split(',');
+          var removed = 0;
+          for (var i = 0; i < parts.length; i++) {
+            if (removeFromBlacklist(parts[i])) {
+              clearMissionFailure(parts[i]);
+              removed++;
+            }
+          }
+          alert('Đã bỏ chặn ' + removed + '/' + parts.length + ' mã.\nTải lại trang để áp dụng.');
+        });
+        GM_registerMenuCommand('Bỏ chặn TẤT CẢ (kể cả mặc định)', function () {
+          if (!confirm('Bỏ chặn toàn bộ, kể cả mã mặc định?\nTự động chặn khi fail vẫn hoạt động.'))
+            return;
           writeLocalBlacklist([]);
+          writeAllowlist(BLACKLIST_DEFAULT.slice());
           writeFailCounts({});
-          log('Đã xoá danh sách chặn tự thêm và bộ đếm thất bại.', 'success');
-          alert('Đã xoá. Tải lại trang để áp dụng.');
+          log('Đã bỏ chặn tất cả nhiệm vụ.', 'success');
+          alert('Đã bỏ chặn tất cả. Tải lại trang để áp dụng.');
+        });
+        GM_registerMenuCommand('Khôi phục chặn mặc định', function () {
+          if (!confirm('Xoá mọi thay đổi, quay về danh sách chặn mặc định?')) return;
+          writeLocalBlacklist([]);
+          writeAllowlist([]);
+          writeFailCounts({});
+          log('Đã khôi phục danh sách chặn mặc định.', 'success');
+          alert('Đã khôi phục. Tải lại trang để áp dụng.');
         });
       } catch (err) {}
     }
@@ -1619,7 +1797,6 @@
       try {
         var old = document.getElementById('oc-blocked-box');
         if (old && old.parentNode) old.parentNode.removeChild(old);
-        var isLocal = readLocalBlacklist().indexOf(normalizeBlacklistEntry(id)) >= 0;
         var box = document.createElement('div');
         box.id = 'oc-blocked-box';
         box.innerHTML =
@@ -1630,22 +1807,22 @@
           escapeHtml(matchedBy) +
           '</code><br>' +
           '<span style="color:#9b93b8">Tiến trình đã dừng hoàn toàn.</span>' +
-          (isLocal
-            ? '<br><button class="oc-unblock" id="oc-unblock-btn">Bỏ chặn &amp; tải lại</button>'
-            : '<br><span style="color:#9b93b8;font-size:11px">Mã mặc định — sửa ' +
-              'BLACKLIST_DEFAULT trong script để bỏ.</span>');
+          '<br><button class="oc-unblock" id="oc-unblock-btn">Bỏ chặn &amp; tải lại</button>';
         panelBody.appendChild(box);
         panelBody.scrollTop = panelBody.scrollHeight;
         var ubBtn = document.getElementById('oc-unblock-btn');
         if (ubBtn) {
           ubBtn.addEventListener('click', function () {
-            if (removeFromBlacklist(id)) {
-              clearMissionFailure(id);
-              log('Đang tải lại trang...', 'system');
-              setTimeout(function () {
-                window.location.reload();
-              }, 600);
+            // bỏ chặn cả slug và mã đã khớp (mã khớp có thể là mã mặc định)
+            removeFromBlacklist(id);
+            if (normalizeBlacklistEntry(matchedBy) !== normalizeBlacklistEntry(id)) {
+              removeFromBlacklist(matchedBy);
             }
+            clearMissionFailure(id);
+            log('Đang tải lại trang...', 'system');
+            setTimeout(function () {
+              window.location.reload();
+            }, 600);
           });
         }
       } catch (err) {}
