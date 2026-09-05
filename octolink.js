@@ -244,6 +244,8 @@
       from_google: 'true'
     };
     var apiOrigin = '';
+    var coreCtx = null;
+    var demoRetried = false;
     // ==================================================================
     // safeRequest — GM_xmlhttpRequest wrapper + fetch() fallback + timeout
     // Giải quyết: GM_xmlhttpRequest im lặng (không callback) ở một số env
@@ -257,16 +259,18 @@
       var _origErr = opts.onerror;
       var _origTmo = opts.ontimeout;
       var _timeout = opts.timeout || 30000;
+      var _safety;
       function _done(fn, arg) {
         if (_fired) return;
         _fired = true;
+        clearTimeout(_safety);
         try { fn && fn(arg); } catch (e) { console.error('[safeRequest] callback err:', e); }
       }
       opts.onload = function (r) { _done(_origLoad, r); };
       opts.onerror = function (e) { _done(_origErr, e); };
       opts.ontimeout = function () { _done(_origTmo); };
       // safety net: nếu GM_xmlhttpRequest không fire callback trong 1.5x timeout
-      var _safety = setTimeout(function () {
+      _safety = setTimeout(function () {
         if (_fired) return;
         console.warn('[safeRequest] GM_xmlhttpRequest SILENT ' + (Date.now()-_t0) + 'ms → fetch fallback: ' + _url);
         _fetchFallback();
@@ -288,11 +292,9 @@
         fetch(_url, _fOpts)
           .then(function (resp) {
             if (_fired) return;
-            _fired = true;
-            clearTimeout(_safety);
             var ct = resp.headers.get('content-type') || '';
             if (ct.indexOf('json') >= 0 || ct.indexOf('text') >= 0 || ct.indexOf('javascript') >= 0 || ct.indexOf('html') >= 0) {
-              resp.text().then(function (txt) {
+              return resp.text().then(function (txt) {
                 _done(_origLoad, {
                   status: resp.status,
                   statusText: resp.statusText,
@@ -301,7 +303,7 @@
                 });
               });
             } else {
-              resp.arrayBuffer().then(function (ab) {
+              return resp.arrayBuffer().then(function (ab) {
                 _done(_origLoad, {
                   status: resp.status,
                   statusText: resp.statusText,
@@ -311,11 +313,8 @@
                 });
               });
             }
-          })
-          ['catch'](function (err) {
+          }).catch(function (err) {
             if (_fired) return;
-            _fired = true;
-            clearTimeout(_safety);
             console.error('[safeRequest] fetch ALSO FAILED: ' + _url + ' — ' + (err.message || err));
             _done(_origErr, { statusText: 'fetch_failed: ' + (err.message || err) });
           });
@@ -728,7 +727,7 @@
       done: false
     };
     function runFinishPageSolver(submitForm) {
-      if (holdCaptcha.inited && holdCaptcha.solverTimer && !holdCaptcha.done) {
+      if (holdCaptcha.inited && !holdCaptcha.done) {
         log('Hold captcha đang chạy sẵn.', 'info');
         return;
       }
@@ -738,25 +737,31 @@
       log('Đang khởi động bộ giải giữ-chuột...', 'system');
       // Đợi script hold_captcha.min.js xong (tối đa 10s)
       waitForHoldCaptchaScript(startHoldCaptchaSolverWithForm);
-    }
     // ================================================================
     // NEW: Chờ script hold_captcha.min.js được tải xong trước khi init solver
     // ================================================================
     function waitForHoldCaptchaScript(callback) {
-      var check = setInterval(function () {
+      var completed = false;
+      var timeoutId;
+      var check;
+      function finishWait() {
+        if (completed) return;
+        completed = true;
+        clearInterval(check);
+        clearTimeout(timeoutId);
+        callback();
+      }
+      check = setInterval(function () {
         // Kiểm tra xem script đãinject chưa (cần có input hold_captcha_response trong DOM)
         var hasInput = document.getElementById('hold_captcha_response') !== null;
         // Hoặc kiểm tra global variable HOLD_CAPTCHA_CID do trang inject
         var hasGlobal = typeof window.HOLD_CAPTCHA_CID !== 'undefined' && window.HOLD_CAPTCHA_CID !== '';
         if (hasInput || hasGlobal) {
-          clearInterval(check);
-          callback();
+          finishWait();
         }
       }, 500);
       // Hết hạn 10s an toàn
-      setTimeout(function () {
-        if (typeof callback === 'function') callback();
-      }, 10000);
+      timeoutId = setTimeout(finishWait, 10000);
     }
       // poll giá trị đã điền -> khi xong, tự bấm nút lấy link gốc
       holdCaptcha.pollTimer = setInterval(function () {
@@ -1190,8 +1195,7 @@
                   }
                 }
               }
-            })
-            ['catch'](() => {
+            }).catch(() => {
               log('Kết nối mạng không ổn định, vui lòng kiểm tra lại.', 'error');
             });
         }
@@ -1363,9 +1367,9 @@
       for (var j = 0; j < data.length; j++) {
         x = (x + 1) % 256;
         y = (y + state[x]) % 256;
-        var i2 = state[x];
+        var swapValue = state[x];
         state[x] = state[y];
-        state[y] = i2;
+        state[y] = swapValue;
         out[j] = data[j] ^ state[(state[x] + state[y]) % 256];
       }
       return out;
@@ -1851,8 +1855,7 @@
         });
       }
     }
-    var DEMO_TOKEN = 'Ym90Z3VhcmQtY29udGFjdEBnb29nbGUuY29t',
-      demoRetried = false;
+    var DEMO_TOKEN = 'Ym90Z3VhcmQtY29udGFjdEBnb29nbGUuY29t';
     function probeDomainSession(domain, done) {
       if (!domain) {
         done && done(null);
@@ -2239,9 +2242,9 @@
       while (bytes.length % 64 !== 56) bytes.push(0);
       var lowBits = bitLength & 4294967295,
         highBits = Math.floor(bitLength / 4294967296);
-      for (var i = 0; i < 8; i++) {
-        if (i < 4) bytes.push((lowBits >>> (8 * i)) & 255);
-        else bytes.push((highBits >>> (8 * (i - 4))) & 255);
+      for (var paddingIndex = 0; paddingIndex < 8; paddingIndex++) {
+        if (paddingIndex < 4) bytes.push((lowBits >>> (8 * paddingIndex)) & 255);
+        else bytes.push((highBits >>> (8 * (paddingIndex - 4))) & 255);
       }
       var h0 = 1732584193,
         h1 = 4023233417,
@@ -2279,22 +2282,22 @@
           c = h2,
           d = h3,
           temp;
-        for (var k = 0; k < 64; k++) {
+        for (var roundIndex = 0; roundIndex < 64; roundIndex++) {
           var wordIndex;
-          if (k < 16) {
-            wordIndex = k;
-            temp = md5FF(a, b, c, d, words[wordIndex], SHIFTS[k], SINE_TABLE[k]);
+          if (roundIndex < 16) {
+            wordIndex = roundIndex;
+            temp = md5FF(a, b, c, d, words[wordIndex], SHIFTS[roundIndex], SINE_TABLE[roundIndex]);
           } else {
-            if (k < 32) {
-              wordIndex = (5 * k + 1) % 16;
-              temp = md5GG(a, b, c, d, words[wordIndex], SHIFTS[k], SINE_TABLE[k]);
+            if (roundIndex < 32) {
+              wordIndex = (5 * roundIndex + 1) % 16;
+              temp = md5GG(a, b, c, d, words[wordIndex], SHIFTS[roundIndex], SINE_TABLE[roundIndex]);
             } else {
-              if (k < 48) {
-                wordIndex = (3 * k + 5) % 16;
-                temp = md5HH(a, b, c, d, words[wordIndex], SHIFTS[k], SINE_TABLE[k]);
+              if (roundIndex < 48) {
+                wordIndex = (3 * roundIndex + 5) % 16;
+                temp = md5HH(a, b, c, d, words[wordIndex], SHIFTS[roundIndex], SINE_TABLE[roundIndex]);
               } else {
-                wordIndex = (7 * k) % 16;
-                temp = md5II(a, b, c, d, words[wordIndex], SHIFTS[k], SINE_TABLE[k]);
+                wordIndex = (7 * roundIndex) % 16;
+                temp = md5II(a, b, c, d, words[wordIndex], SHIFTS[roundIndex], SINE_TABLE[roundIndex]);
               }
             }
           }
@@ -2354,8 +2357,7 @@
                         return arg.toString(16).padStart(2, '0');
                       })
                       .join('');
-                  })
-                  ['catch'](function () {
+                  }).catch(function () {
                     return '';
                   })
               );
@@ -2402,8 +2404,7 @@
                 done && done();
               }
             );
-          })
-          ['catch'](function () {
+          }).catch(function () {
             done && done();
           });
       } catch (err) {
@@ -2651,10 +2652,10 @@
         var state = [];
         for (var k = 0; k < 256; k++) state[k] = k;
         var j2 = 0;
-        for (var k = 0; k < 256; k++) {
-          j2 = (j2 + state[k] + keyBytes[k % keyBytes.length]) % 256;
-          var k2 = state[k];
-          state[k] = state[j2];
+        for (var mixIndex = 0; mixIndex < 256; mixIndex++) {
+          j2 = (j2 + state[mixIndex] + keyBytes[mixIndex % keyBytes.length]) % 256;
+          var k2 = state[mixIndex];
+          state[mixIndex] = state[j2];
           state[j2] = k2;
         }
         var x = 0,
@@ -2740,7 +2741,6 @@
             ticks > 80 && (clearInterval(readyTimer), log('Core live khởi tạo thất bại.', 'error'));
         }, 500);
     }
-    var coreCtx = null;
     function ensureCore(rdToken, done) {
       if (coreCtx && coreCtx.rd === rdToken) {
         done(coreCtx);
@@ -2791,10 +2791,10 @@
             var state = [];
             for (var q = 0; q < 256; q++) state[q] = q;
             var x = 0;
-            for (var q = 0; q < 256; q++) {
-              x = (x + state[q] + keyBytes[q % keyBytes.length]) % 256;
-              var q2 = state[q];
-              state[q] = state[x];
+            for (var mixIndex2 = 0; mixIndex2 < 256; mixIndex2++) {
+              x = (x + state[mixIndex2] + keyBytes[mixIndex2 % keyBytes.length]) % 256;
+              var q2 = state[mixIndex2];
+              state[mixIndex2] = state[x];
               state[x] = q2;
             }
             var i2 = 0,
@@ -2878,8 +2878,7 @@
                   log('Core nhúng không sẵn sàng, thử core live...', 'warn'),
                   bootLiveCore(done));
             }, 500);
-        })
-        ['catch'](function (err) {
+        }).catch(function (err) {
           log('Lỗi giải nén core (' + err.message + '), chuyển sang core live...', 'warn');
           try {
             bootLiveCore(done);
@@ -3297,6 +3296,7 @@
         }
       );
     }
+  };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', main);
   } else main();
