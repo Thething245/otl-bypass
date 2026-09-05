@@ -12,6 +12,7 @@
 // @match        *://*.linkhuongdan.online/*
 // @match        *://*.totreview.com/*
 // @match        *://*.octolink.vip/*
+// @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -40,6 +41,19 @@
 (function () {
   'use strict';
 
+  var currentHost = window.location.hostname;
+  var hasRedirectTarget = new URLSearchParams(window.location.search).has('redirect_to_octo');
+  var isSupportedHost =
+    currentHost === 'minuc.vn' ||
+    currentHost.endsWith('.minuc.vn') ||
+    currentHost === 'linkhuongdan.online' ||
+    currentHost.endsWith('.linkhuongdan.online') ||
+    currentHost === 'totreview.com' ||
+    currentHost.endsWith('.totreview.com') ||
+    currentHost === 'octolink.vip' ||
+    currentHost.endsWith('.octolink.vip');
+
+  if (!isSupportedHost && !hasRedirectTarget) return;
   if (window.__chodenoctoLoaderRunning) return;
   window.__chodenoctoLoaderRunning = true;
 
