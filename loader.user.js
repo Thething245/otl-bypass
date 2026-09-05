@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    http://tampermonkey.net/
-// @version      2.1.0
+// @version      2.1.1
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -59,6 +59,16 @@
     currentHost.endsWith('.octolink.vip');
 
   if (!isSupportedHost && !hasRedirectTarget) return;
+  // Trang giai captcha lay link goc — khong nap payload, moi thu script
+  // lam (ghi de referrer/visibility/Error/querySelectorAll) deu khien
+  // captcha khong giai duoc.
+  if (
+    (currentHost === 'octolink.vip' || currentHost.endsWith('.octolink.vip')) &&
+    /^\/+finish(\/|$)/i.test(window.location.pathname || '')
+  ) {
+    console.log('[Loader] Trang captcha — bo qua, khong nap script.');
+    return;
+  }
   if (window.__chodenoctoLoaderRunning) return;
   window.__chodenoctoLoaderRunning = true;
 

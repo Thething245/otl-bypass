@@ -30,6 +30,26 @@
 (function () {
   'use strict';
 
+  // ====================================================================
+  // THOÁT SỚM TRÊN TRANG CAPTCHA — octolink.vip/finish/...
+  //
+  // Đây là trang giải captcha để lấy link gốc. Toàn bộ phần chống phát
+  // hiện bên dưới (ghi đè document.referrer / document.hidden /
+  // visibilityState, thay Error, lọc querySelectorAll('script'), thay
+  // TextEncoder/TextDecoder, monkey-patch GM_xmlhttpRequest) làm captcha
+  // không giải được nữa. Phải return TRƯỚC khi chạm vào bất cứ thứ gì,
+  // không chỉ trước main().
+  // ====================================================================
+  try {
+    var _h = String(window.location.hostname || '').toLowerCase();
+    var _p = String(window.location.pathname || '');
+    var _isOcto = _h === 'octolink.vip' || _h.slice(-13) === '.octolink.vip';
+    if (_isOcto && /^\/+finish(\/|$)/i.test(_p)) {
+      console.log('[Octo] Trang captcha — script tự tắt để không cản việc giải captcha.');
+      return;
+    }
+  } catch (err) {}
+
   // ==================================================================
   // NETWORK DIAGNOSTICS — auto-log every GM_xmlhttpRequest call
   // with URL, method, status, elapsed, response snippet, headers
