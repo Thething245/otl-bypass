@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      2.0.1
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -31,7 +31,10 @@
 // @grant        GM.registerMenuCommand
 // @grant        GM.getResourceText
 // @grant        GM.addElement
+// @connect      *
 // @connect      raw.githubusercontent.com
+// @connect      octolink.vip
+// @connect      api.github.com
 // @run-at       document-idle
 // @downloadURL  https://raw.githubusercontent.com/Thething245/otl-bypass/main/loader.user.js
 // @updateURL    https://raw.githubusercontent.com/Thething245/otl-bypass/main/loader.user.js
