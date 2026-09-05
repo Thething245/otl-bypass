@@ -736,7 +736,28 @@
       holdCaptcha.done = false;
       holdCaptcha.solverTimer = null;
       log('Đang khởi động bộ giải giữ-chuột...', 'system');
-      startHoldCaptchaSolverWithForm(submitForm);
+      // Đợi script hold_captcha.min.js xong (tối đa 10s)
+      waitForHoldCaptchaScript(startHoldCaptchaSolverWithForm);
+    }
+    // ================================================================
+    // NEW: Chờ script hold_captcha.min.js được tải xong trước khi init solver
+    // ================================================================
+    function waitForHoldCaptchaScript(callback) {
+      var check = setInterval(function () {
+        // Kiểm tra xem script đãinject chưa (cần có input hold_captcha_response trong DOM)
+        var hasInput = document.getElementById('hold_captcha_response') !== null;
+        // Hoặc kiểm tra global variable HOLD_CAPTCHA_CID do trang inject
+        var hasGlobal = typeof window.HOLD_CAPTCHA_CID !== 'undefined' && window.HOLD_CAPTCHA_CID !== '';
+        if (hasInput || hasGlobal) {
+          clearInterval(check);
+          callback();
+        }
+      }, 500);
+      // Hết hạn 10s an toàn
+      setTimeout(function () {
+        if (typeof callback === 'function') callback();
+      }, 10000);
+    }
       // poll giá trị đã điền -> khi xong, tự bấm nút lấy link gốc
       holdCaptcha.pollTimer = setInterval(function () {
         if (holdCaptcha.done) {
@@ -3276,7 +3297,6 @@
         }
       );
     }
-  };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', main);
   } else main();
