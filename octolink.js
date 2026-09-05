@@ -362,17 +362,9 @@
           } catch (err2) {}
         }
         setTimeout(() => {
-          {
-            let metaEl = document.createElement('meta');
-            metaEl.name = 'referrer';
-            metaEl.content = 'unsafe-url';
-            document.head.appendChild(metaEl);
-            let aEl = document.createElement('a');
-            aEl.href = redirectTarget;
-            aEl.referrerPolicy = 'unsafe-url';
-            document.body.appendChild(aEl);
-            aEl.click();
-          }
+          try {
+            window.location.href = redirectTarget;
+          } catch (e) {}
         }, 1000);
         return;
       }
@@ -716,373 +708,7 @@
           item.innerText = 'Hệ thống đang xử lý, xin đừng nhấn...';
         });
     }
-    // ====================================================================
-    // HOLD CAPTCHA — tự di chuyển dấu chấm vào vòng tròn trên canvas,
-    // giữ 1 giây rồi bấm nút lấy link gốc (trang octolink.vip/finish/...)
-    // ====================================================================
-    var holdCaptcha = {
-      inited: false,
-      solverTimer: null,
-      pollTimer: null,
-      done: false
-    };
-    function runFinishPageSolver(submitForm) {
-      if (holdCaptcha.inited && !holdCaptcha.done) {
-        log('Hold captcha đang chạy sẵn.', 'info');
-        return;
-      }
-      holdCaptcha.inited = true;
-      holdCaptcha.done = false;
-      holdCaptcha.solverTimer = null;
-      log('Đang khởi động bộ giải giữ-chuột...', 'system');
-      // Đợi script hold_captcha.min.js xong (tối đa 10s)
-      waitForHoldCaptchaScript(startHoldCaptchaSolverWithForm);
-    // ================================================================
-    // NEW: Chờ script hold_captcha.min.js được tải xong trước khi init solver
-    // ================================================================
-    function waitForHoldCaptchaScript(callback) {
-      var completed = false;
-      var timeoutId;
-      var check;
-      function finishWait() {
-        if (completed) return;
-        completed = true;
-        clearInterval(check);
-        clearTimeout(timeoutId);
-        callback();
-      }
-      check = setInterval(function () {
-        // Kiểm tra xem script đãinject chưa (cần có input hold_captcha_response trong DOM)
-        var hasInput = document.getElementById('hold_captcha_response') !== null;
-        // Hoặc kiểm tra global variable HOLD_CAPTCHA_CID do trang inject
-        var hasGlobal = typeof window.HOLD_CAPTCHA_CID !== 'undefined' && window.HOLD_CAPTCHA_CID !== '';
-        if (hasInput || hasGlobal) {
-          finishWait();
-        }
-      }, 500);
-      // Hết hạn 10s an toàn
-      timeoutId = setTimeout(finishWait, 10000);
-    }
-      // poll giá trị đã điền -> khi xong, tự bấm nút lấy link gốc
-      holdCaptcha.pollTimer = setInterval(function () {
-        if (holdCaptcha.done) {
-          clearInterval(holdCaptcha.pollTimer);
-          return;
-        }
-        var resInput =
-          document.getElementById('hold_captcha_response') ||
-          document.querySelector('input[name="hold_captcha_response"]');
-        if (resInput && resInput.value && resInput.value.length > 5) {
-          holdCaptcha.done = true;
-          clearInterval(holdCaptcha.pollTimer);
-          log('Đã điền giữ-chuột thành công. Lấy link gốc...', 'success');
-          if (submitForm) {
-            try {
-              submitForm();
-            } catch (e) {}
-          }
-          try {
-            clickOriginalLinkButton();
-          } catch (e) {}
-        }
-      }, 400);
-    }
-    function clickOriginalLinkButton() {
-      var candidates = document.querySelectorAll(
-        'a, button, input[type="submit"], input[type="button"], .btn-primary, .btn-captcha, .btn'
-      );
-      for (var i = 0; i < candidates.length; i++) {
-        var b = candidates[i];
-        var txt = (b.innerText || b.value || b.textContent || '').toLowerCase();
-        var href = (b.getAttribute('href') || b.getAttribute('action') || '').toLowerCase();
-        var hit =
-          href.includes('kiemcom') ||
-          href.includes('skibiditask') ||
-          txt.includes('link gốc') ||
-          txt.includes('quay về') ||
-          txt.includes('lấy link') ||
-          txt.includes('tiếp tục') ||
-          txt.includes('continue');
-        if (hit) {
-          try {
-            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (n) {
-              b.dispatchEvent(
-                new MouseEvent(n, { bubbles: true, cancelable: true, view: window })
-              );
-            });
-            b.click();
-          } catch (e) {}
-          return;
-        }
-      }
-      // chưa thấy nút link gốc -> thử submit form và quét DOM sau
-      log('Nút link gốc chưa xuất hiện, đang quét tiếp...', 'warn');
-      try {
-        var form = document.querySelector('form');
-        if (form) form.submit();
-      } catch (e) {}
-      setTimeout(function () {
-        var m = document.body.innerHTML.match(
-          /<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>[^<]*Link\s*G[óo]c/i
-        );
-        if (m && isFinalLink(m[1])) finishPageReveal(m[1]);
-        else {
-          var any = document.body.innerHTML.match(/href=["'](https?:\/\/[^"']+)["']/i);
-          if (any && isFinalLink(any[1])) finishPageReveal(any[1]);
-        }
-      }, 1500);
-    }
-    function finishPageReveal(url) {
-      try {
-        rememberCampaign(missionId, { finalUrl: url, countRun: true });
-      } catch (e) {}
-      log(
-        'LINK GỐC: <a href="' +
-          url +
-          '" target="_blank" rel="noreferrer" style="color:#67e8f9;text-decoration:underline">' +
-          url +
-          '</a>',
-        'success'
-      );
-      log('Tự động mở link sau 2 giây...', 'system');
-      setTimeout(function () {
-        window.location.href = url;
-      }, 2000);
-    }
-    function runHoldCaptchaSolver(submitForm) {
-      runFinishPageSolver(submitForm);
-    }
-    // --- solver canvas (giữ dấu chấm vào vòng tròn) -----------------------
-    function startHoldCaptchaSolverWithForm(submitForm) {
-      var solverState = { running: false, interval: null, finished: false };
-      function searchCanvasDeep(node) {
-        if (!node) return null;
-        if (node.tagName === 'CANVAS') return node;
-        if (node.querySelector) {
-          var c = node.querySelector('canvas');
-          if (c) return c;
-        }
-        if (node.shadowRoot) {
-          var fc = searchCanvasDeep(node.shadowRoot);
-          if (fc) return fc;
-        }
-        if (node.querySelectorAll) {
-          var children = node.querySelectorAll('*');
-          for (var i = 0; i < children.length; i++) {
-            var el = children[i];
-            if (el.tagName === 'CANVAS') return el;
-            if (el.shadowRoot) {
-              var fc2 = searchCanvasDeep(el.shadowRoot);
-              if (fc2) return fc2;
-            }
-          }
-        }
-        return null;
-      }
-      function findCanvasAuto() {
-        if (document.body) {
-          var f = searchCanvasDeep(document.body);
-          if (f) return f;
-        }
-        if (document.documentElement) {
-          var f2 = searchCanvasDeep(document.documentElement);
-          if (f2) return f2;
-        }
-        return null;
-      }
-      function getExactCanvasRect(canvas) {
-        var r = canvas.getBoundingClientRect();
-        if (r && r.width > 0) return r;
-        var host = document.getElementById('captchaShortlink') || document.querySelector('[id*="pe"]');
-        if (host) {
-          var hr = host.getBoundingClientRect();
-          var cw = Math.min(hr.width, 504);
-          var off = (hr.width - cw) / 2;
-          return { left: hr.left + off, top: hr.top, width: cw, height: hr.height || 430 };
-        }
-        return null;
-      }
-      function makePointerOpts(x, y) {
-        return {
-          clientX: x,
-          clientY: y,
-          pageX: x + window.scrollX,
-          pageY: y + window.scrollY,
-          screenX: x,
-          screenY: y,
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          view: window,
-          detail: 1,
-          button: 0,
-          buttons: 1,
-          pointerId: 1,
-          pointerType: 'mouse',
-          isPrimary: true
-        };
-      }
-      function dispatchMove(target, x, y) {
-        var opts = makePointerOpts(x, y);
-        try {
-          target.dispatchEvent(new PointerEvent('pointermove', opts));
-          target.dispatchEvent(new MouseEvent('mousemove', opts));
-        } catch (e) {}
-      }
-      function dispatchDown(target, x, y) {
-        var opts = makePointerOpts(x, y);
-        try {
-          target.dispatchEvent(new PointerEvent('pointerdown', opts));
-          target.dispatchEvent(new MouseEvent('mousedown', opts));
-        } catch (e) {}
-      }
-      function dispatchUp(target, x, y) {
-        var opts = makePointerOpts(x, y);
-        opts.buttons = 0;
-        try {
-          target.dispatchEvent(new PointerEvent('pointerup', opts));
-          target.dispatchEvent(new MouseEvent('mouseup', opts));
-          target.dispatchEvent(new MouseEvent('click', opts));
-        } catch (e) {}
-      }
-      function isResponseFilled() {
-        var el =
-          document.getElementById('hold_captcha_response') ||
-          document.querySelector('input[name="hold_captcha_response"]');
-        return el && el.value && el.value.length > 5;
-      }
-      function runWithCanvas(canvas) {
-        if (!canvas || solverState.running) return;
-        solverState.running = true;
-        var ctx;
-        try {
-          ctx = canvas.getContext('2d', { willReadFrequently: true }) || canvas.getContext('2d');
-        } catch (e) {
-          return;
-        }
-        var rect = getExactCanvasRect(canvas);
-        if (!rect || rect.width === 0) {
-          log('Không xác định được vị trí canvas.', 'error');
-          solverState.running = false;
-          return;
-        }
-        var w = canvas.width || 504;
-        var h = canvas.height || 430;
-        var scaleX = rect.width / w;
-        var scaleY = rect.height / h;
-        log('Canvas đã tìm thấy (' + w + 'x' + h + '). Bắt đầu giải hold captcha...', 'system');
-        function findDot() {
-          var scanStartY = Math.floor(h * 0.15);
-          var scanEndY = Math.floor(h * 0.95);
-          var scanH = scanEndY - scanStartY;
-          var imgData;
-          try {
-            imgData = ctx.getImageData(0, scanStartY, w, scanH);
-          } catch (e) {
-            return null;
-          }
-          var data = imgData.data;
-          var sumX = 0,
-            sumY = 0,
-            count = 0;
-          for (var y = 0; y < scanH; y += 2) {
-            var rowPixels = [];
-            for (var x = 0; x < w; x += 2) {
-              var idx = (y * w + x) * 4;
-              var r = data[idx],
-                g = data[idx + 1],
-                b = data[idx + 2],
-                a = data[idx + 3];
-              if (a > 180 && r < 65 && g < 65 && b < 65) rowPixels.push(x);
-            }
-            if (rowPixels.length >= 3 && rowPixels.length <= 30) {
-              for (var k = 0; k < rowPixels.length; k++) {
-                sumX += rowPixels[k];
-                sumY += y + scanStartY;
-                count++;
-              }
-            }
-          }
-          if (count > 5) {
-            return { cx: sumX / count, cy: sumY / count };
-          }
-          return null;
-        }
-        function step(attempt) {
-          if (solverState.finished || isResponseFilled()) {
-            solverState.finished = true;
-            if (isResponseFilled()) {
-              log('Hold captcha solved!', 'success');
-              if (typeof window.__ocHoldSolved === 'function') window.__ocHoldSolved();
-            }
-            return;
-          }
-          if (Date.now() - solverState.startTime > 60000) {
-            solverState.finished = true;
-            log('Hold captcha quá 60 giây, tạm dừng.', 'warn');
-            return;
-          }
-          var dot = findDot();
-          if (!dot) {
-            log('Chưa tìm thấy dấu chấm, thử lại...', 'warn');
-            setTimeout(function () { step(attempt + 1); }, 500);
-            return;
-          }
-          var dotScreenX = rect.left + dot.cx * scaleX;
-          var dotScreenY = rect.top + dot.cy * scaleY;
-          log('Tìm thấy dấu chấm tại (' + Math.round(dot.cx) + ',' + Math.round(dot.cy) + '). Bấm giữ...', 'system');
-          // BƯỚC 1: Move vào dot
-          dispatchMove(canvas, dotScreenX, dotScreenY);
-          dispatchMove(document, dotScreenX, dotScreenY);
-          setTimeout(function () {
-            // BƯỚC 2: Giữ chuột (pointerdown + mousedown)
-            dispatchDown(canvas, dotScreenX, dotScreenY);
-            dispatchDown(document, dotScreenX, dotScreenY);
-            log('Đang giữ chuột... (3 giây)', 'system');
-            var holdStart = Date.now();
-            var jitterInterval = setInterval(function () {
-              if (isResponseFilled() || solverState.finished || Date.now() - holdStart > 4000) {
-                clearInterval(jitterInterval);
-                // BƯỚC 3: Thả chuột
-                dispatchUp(canvas, dotScreenX, dotScreenY);
-                dispatchUp(document, dotScreenX, dotScreenY);
-                setTimeout(function () {
-                  if (isResponseFilled()) {
-                    solverState.finished = true;
-                    log('Hold captcha solved!', 'success');
-                    if (typeof window.__ocHoldSolved === 'function') window.__ocHoldSolved();
-                    return;
-                  }
-                  // Chưa solved → thử lại với dot mới (dot có thể di chuyển)
-                  log('Chưa nhận diện solved, thử lại...', 'warn');
-                  setTimeout(function () { step(attempt + 1); }, 800);
-                }, 500);
-                return;
-              }
-              // jitter nhẹ để giả lập người thật
-              var jx = dotScreenX + (Math.random() - 0.5) * 2;
-              var jy = dotScreenY + (Math.random() - 0.5) * 2;
-              dispatchMove(canvas, jx, jy);
-              dispatchMove(document, jx, jy);
-            }, 80);
-          }, 150);
-        }
-        solverState.startTime = Date.now();
-        step(0);
-      }
-      // poll đến khi có canvas
-      var attempts = 0;
-      var poll = setInterval(function () {
-        var canvas = findCanvasAuto();
-        if (canvas) {
-          clearInterval(poll);
-          runWithCanvas(canvas);
-        } else if (++attempts > 60) {
-          clearInterval(poll);
-          log('Không tìm thấy canvas giữ-chuột.', 'error');
-        }
-      }, 200);
-    }
+
     if (hasCsrfForm || originalLinkMatch) {
       {
         log('Đã tiếp cận trang đích an toàn.', 'system');
@@ -1103,17 +729,10 @@
             pageHtml.includes('g-recaptcha') ||
             document.querySelector('.g-recaptcha') ||
             document.querySelector('[name="g-recaptcha-response"]'),
-          hasHcaptcha =
-            pageHtml.includes('h-captcha') ||
-            document.querySelector('.h-captcha') ||
-            document.querySelector('[name="h-captcha-response"]'),
-          hasHoldCaptcha =
-            pageHtml.includes('hold_captcha') ||
-            pageHtml.includes('holdcaptcha') ||
-            document.querySelector('[name="hold_captcha_response"]') ||
-            document.querySelector('#hold_captcha_response') ||
-            document.querySelector('#captchaShortlink') ||
-            document.querySelector('[id*="pe"]');
+           hasHcaptcha =
+             pageHtml.includes('h-captcha') ||
+             document.querySelector('.h-captcha') ||
+             document.querySelector('[name="h-captcha-response"]');
         function announceFinalLink(url) {
           rememberCampaign(missionId, { finalUrl: url, countRun: true });
           log(
@@ -1220,37 +839,30 @@
             log('Không thể xác định được yêu cầu bảo mật.', 'error');
           }
         } else {
-          if (hasHoldCaptcha) {
-            log('Nhận diện lớp bảo mật giữ chuột (hold captcha). Tự động xử lý...', 'warn');
-            holdCaptcha.inited = false;
-            holdCaptcha.done = false;
-            runHoldCaptchaSolver(function () {
-              submitFormAndFindLink(targetForm);
-            });
+          if (hasRecaptcha || hasHcaptcha) {
+            log('Nhận diện lớp bảo mật hình ảnh.', 'warn');
+            log('Vui lòng hoàn thành xác thực. Hệ thống đang chờ tín hiệu...', 'warn');
+            // BUGFIX: thêm giới hạn 5 phút, trước đây poll vô hạn
+            let captchaTicks = 0;
+            let captchaTimer = setInterval(() => {
+              var recaptchaValue = document.querySelector('[name="g-recaptcha-response"]')?.[
+                  'value'
+                ],
+                hcaptchaValue = document.querySelector('[name="h-captcha-response"]')?.['value'];
+              if (recaptchaValue || hcaptchaValue) {
+                clearInterval(captchaTimer);
+                disableCaptchaButtons();
+                log('Xác thực thành công! Đang thiết lập kết nối...', 'success');
+                submitFormAndFindLink(targetForm);
+                return;
+              }
+              if (++captchaTicks > 300) {
+                clearInterval(captchaTimer);
+                log('Hết thời gian chờ xác thực hình ảnh (5 phút).', 'error');
+              }
+            }, 1000);
           } else {
-            if (hasRecaptcha || hasHcaptcha) {
-              log('Nhận diện lớp bảo mật hình ảnh.', 'warn');
-              log('Vui lòng hoàn thành xác thực. Hệ thống đang chờ tín hiệu...', 'warn');
-              // BUGFIX: thêm giới hạn 5 phút, trước đây poll vô hạn
-              let captchaTicks = 0;
-              let captchaTimer = setInterval(() => {
-                var recaptchaValue = document.querySelector('[name="g-recaptcha-response"]')?.[
-                    'value'
-                  ],
-                  hcaptchaValue = document.querySelector('[name="h-captcha-response"]')?.['value'];
-                if (recaptchaValue || hcaptchaValue) {
-                  clearInterval(captchaTimer);
-                  disableCaptchaButtons();
-                  log('Xác thực thành công! Đang thiết lập kết nối...', 'success');
-                  submitFormAndFindLink(targetForm);
-                  return;
-                }
-                if (++captchaTicks > 300) {
-                  clearInterval(captchaTimer);
-                  log('Hết thời gian chờ xác thực hình ảnh (5 phút).', 'error');
-                }
-              }, 1000);
-            }
+            log('Vui lòng tự hoàn thành xác thực trên trang.', 'warn');
           }
         }
         return;
@@ -1266,8 +878,7 @@
         var slug = pathSegments[pathSegments.length - 1].replace(/\.html?$/i, '');
         var firstSeg = (pathSegments[0] || '').toLowerCase();
         if (firstSeg === 'finish') {
-          log('Trang hoàn tất Octolink. Tự động giải giữ-chuột...', 'warn');
-          runFinishPageSolver(null);
+          log('Trang hoàn tất Octolink. Vui lòng tự hoàn thành xác thực.', 'warn');
           return;
         }
         !/^(statics|js|css|check|finish|links|forms|api|admin|login|register|modern_theme|images|wp-|favicon|robots)$/i.test(
