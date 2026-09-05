@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    http://tampermonkey.net/
-// @version      2.1.1
+// @version      2.2.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -35,6 +35,7 @@
 // @grant        GM.openInTab
 // @connect      *
 // @connect      raw.githubusercontent.com
+// @connect      cdn.jsdelivr.net
 // @connect      octolink.vip
 // @connect      api.github.com
 // @run-at       document-idle
@@ -72,8 +73,15 @@
   if (window.__chodenoctoLoaderRunning) return;
   window.__chodenoctoLoaderRunning = true;
 
-  var REPO_BASE = 'https://raw.githubusercontent.com/Thething245/otl-bypass/main/';
+  // QUAN TRONG: dung /refs/heads/main/ chu KHONG phai /main/.
+  // raw.githubusercontent.com BO QUA query string khi tinh cache key, nen
+  // ?v=Date.now() KHONG bust duoc cache — do da kiem chung: /main/ tra ve
+  // ban cu (x-cache=HIT) toi 5 phut (max-age=300) du them query gi.
+  // Duong dan /refs/heads/main/ la cache key khac va luon tuoi hon.
+  var REPO_BASE = 'https://raw.githubusercontent.com/Thething245/otl-bypass/refs/heads/main/';
+  var REPO_BASE_FALLBACK = 'https://cdn.jsdelivr.net/gh/Thething245/otl-bypass@main/';
   var SCRIPT_URL = REPO_BASE + 'octolink.js';
+  var SCRIPT_URL_FALLBACK = REPO_BASE_FALLBACK + 'octolink.js';
   var LOADER_URL = REPO_BASE + 'loader.user.js';
   var MAX_ATTEMPTS = 3;
   var RETRY_DELAY = 1500;
@@ -341,7 +349,10 @@
   }
 
   function loadSource(attempt) {
-    var url = SCRIPT_URL + '?t=' + Date.now() + '&attempt=' + attempt;
+    // Lan 3 tro di doi sang jsDelivr, phong truong hop raw.githubusercontent
+    // bi chan hoac dang tra ban cu tu cache.
+    var base = attempt >= 3 ? SCRIPT_URL_FALLBACK : SCRIPT_URL;
+    var url = base + '?t=' + Date.now() + '&attempt=' + attempt;
     var settled = false;
 
     function success(source, status) {
@@ -349,7 +360,7 @@
       settled = true;
 
       try {
-        console.log('[Loader] HTTP status:', status || 200);
+        console.log('[Loader] HTTP status:', status || 200, '·', base);
         executeSource(source);
         console.log('[Loader] Loaded script (' + Math.round(source.length / 1024) + 'KB)');
         cachePayload(source);
