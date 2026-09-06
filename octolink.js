@@ -262,9 +262,7 @@
     };
     var apiOrigin = '';
     var coreCtx = null;
-    var demoRetried = 0;
-    // Số lần thử lại khi server trả token demo (phiên chưa được nhận).
-    const DEMO_MAX_RETRY = 4;
+    var demoRetried = false;
     // true = nhiệm vụ bị chặn, mọi tiến trình phải dừng
     var missionHalted = false;
     // ==================================================================
@@ -2109,7 +2107,7 @@
           let domain = raw.replace(/https?:\/\//i, '').replace(/\/+$/, '');
           if (domain.includes('/')) domain = domain.split('/').filter(Boolean).pop() || domain;
           log('Đang kiểm tra định tuyến cho: ' + domain, 'system');
-          demoRetried = 0;
+          demoRetried = false;
           log('Truy cập ẩn ' + domain + ' để xác định domain thật...', 'system');
           safeRequest({
             method: 'GET',
@@ -2250,40 +2248,18 @@
           return;
         }
         if (rdMatch[1] === DEMO_TOKEN) {
-          // Token demo = server không nhận ra phiên. Nguyên nhân thường là
-          // chưa ghé domain nhiệm vụ nên chưa có cookie phiên. Ghé lại rồi thử.
-          demoRetried++;
-          if (demoRetried <= DEMO_MAX_RETRY) {
-            var delay = Math.min(15000, 3000 * demoRetried);
-            log(
-              'Server trả mã hóa demo (' +
-                demoRetried +
-                '/' +
-                DEMO_MAX_RETRY +
-                ') — tạo lại phiên rồi thử sau ' +
-                Math.round(delay / 1000) +
-                's...',
-              'warn'
-            );
+          if (!demoRetried) {
+            demoRetried = true;
+            log('Server trả mã hóa demo - thử lại sau 5s...', 'warn');
             setTimeout(function () {
-              var host = targetUrl.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-              probeDomainSession(host, function () {
-                startFromJsconfig(targetUrl, source, unusedArg);
-              });
-            }, delay);
+              startFromJsconfig(targetUrl, source, unusedArg);
+            }, 5000);
           } else {
-            log(
-              'Vẫn nhận mã hóa demo sau ' +
-                DEMO_MAX_RETRY +
-                ' lần. Phiên bị từ chối — thử đổi mạng/xoá cookie octolink.vip rồi tải lại.',
-              'error'
-            );
-            recordMissionFailure(missionId, 'server trả mã hóa demo');
+            log('Vẫn nhận mã hóa demo. Session không hợp lệ - thử lại sau hoặc dùng trình duyệt sạch.', 'error');
             showManualDomainForm();
           }
           return;
         }
-        demoRetried = 0;
         log('Mã hóa hợp lệ. Cho phép tiến hành bước tiếp theo.', 'success');
         var domain = targetUrl.replace(/https?:\/\//i, '').replace(/\/$/, '');
         rememberCampaign(missionId, { domain: domain });
@@ -2307,8 +2283,7 @@
         log('jsconfig timeout an toàn (10s) — thử fallback fetch...', 'warn');
         fetch('https://octolink.vip/statics/jsconfig.js', {
           method: 'GET',
-          cache: 'no-store',
-          credentials: 'include'
+          cache: 'no-store'
         })
           .then(function (r) { return r.text(); })
           .then(function (txt) {
@@ -2322,44 +2297,33 @@
             onJsconfigError('fetch lỗi: ' + (e.message || e));
           });
       }, 10000);
-      // Chưa có cookie phiên -> ghé domain nhiệm vụ trước, nếu không server
-      // sẽ trả token demo. Đây là nguyên nhân chính của lỗi "mã hóa demo".
-      function requestJsconfig() {
-        var jsconfigHeaders = {
+      safeRequest({
+        method: 'GET',
+        url: 'https://octolink.vip/statics/jsconfig.js',
+        timeout: 0xea60,
+        headers: {
           accept: '*/*',
           referer: targetUrl + (targetUrl.endsWith('/') ? '' : '/'),
           'user-agent': USER_AGENT
-        };
-        if (cookieHeader !== '') jsconfigHeaders.cookie = cookieHeader;
-        safeRequest({
-          method: 'GET',
-          url: 'https://octolink.vip/statics/jsconfig.js',
-          timeout: 0xea60,
-          headers: jsconfigHeaders,
-          onload: function (response) {
-            if (_jsconfigDone) return;
-            _jsconfigDone = true;
-            try {
-              collectCookies(response.responseHeaders);
-            } catch (e) {}
-            handleJsconfigResponse(response.responseText || '');
-          },
-          onerror: function () {
-            onJsconfigError('lỗi mạng');
-          },
-          ontimeout: function () {
-            onJsconfigError('hết thời gian chờ');
-          }
-        });
-      }
-      if (cookieHeader === '') {
-        var seedHost = targetUrl.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-        probeDomainSession(seedHost, function () {
-          requestJsconfig();
-        });
-      } else {
-        requestJsconfig();
-      }
+        },
+        onload: function (response) {
+          if (_jsconfigDone) return;
+          _jsconfigDone = true;
+          try {
+            response.responseHeaders.split('\x0a').forEach((headerLine) => {
+              if (headerLine.toLowerCase().startsWith('set-cookie:'))
+                cookieHeader += headerLine.substring(11).split(';')[0].trim() + ';\x20';
+            });
+          } catch (e) {}
+          handleJsconfigResponse(response.responseText || '');
+        },
+        onerror: function () {
+          onJsconfigError('lỗi mạng');
+        },
+        ontimeout: function () {
+          onJsconfigError('hết thời gian chờ');
+        }
+      });
     }
     function octolinkCheckDevice(alias) {
       if (missionHalted) return;
