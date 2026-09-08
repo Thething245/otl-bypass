@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.0.0
+// @version      2.3.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -434,7 +434,7 @@
         'try{var _n=navigator,_c=document.createElement("canvas");_c.width=1280;_c.height=720;' +
         'var _ctx=_c.getContext("2d");_ctx.textBaseline="top";_ctx.font="14px Arial";' +
         '_ctx.fillStyle="#f60";_ctx.fillRect(125,1,62,20);_ctx.fillStyle="#069";' +
-        '_ctx.fillText("Fingerprint "+Date.now(),2,15);_ctx.fillStyle="rgba(102,204,0,0.7)";' +
+        '_ctx.fillText("Fingerprint OctoBypass",2,15);_ctx.fillStyle="rgba(102,204,0,0.7)";' +
         '_ctx.fillText("Spoofed Canvas",4,45);var _cv=_c.toDataURL();' +
         'HTMLCanvasElement.prototype.toDataURL=function(){return _cv;};' +
         'HTMLCanvasElement.prototype.toBlob=function(cb,type,enc){_c.toBlob(cb,type,enc);};' +
@@ -2786,34 +2786,66 @@
         try {
           rawPayload = coreWindow.__b110671();
         } catch (err) {}
-        var signPayload = function () {
+        // Lấy crypto.subtle từ nhiều nguồn — iframe sandbox có thể không expose.
+        function getSubtle() {
           try {
-            if (coreWindow.crypto && coreWindow.crypto.subtle) {
+            if (coreWindow && coreWindow.crypto && coreWindow.crypto.subtle)
+              return coreWindow.crypto.subtle;
+          } catch (err) {}
+          try {
+            if (window && window.crypto && window.crypto.subtle) return window.crypto.subtle;
+          } catch (err) {}
+          try {
+            if (globalThis && globalThis.crypto && globalThis.crypto.subtle)
+              return globalThis.crypto.subtle;
+          } catch (err) {}
+          return null;
+        }
+        function bytesToHex(buf) {
+          try {
+            return Array.prototype.map
+              .call(new Uint8Array(buf), function (arg) {
+                return arg.toString(16).padStart(2, '0');
+              })
+              .join('');
+          } catch (err) {
+            return '';
+          }
+        }
+        var signPayload = function () {
+          var subtle = getSubtle();
+          if (subtle) {
+            try {
               var options3 = {};
-              return (
-                (options3.name = 'HMAC'),
-                (options3.hash = 'SHA-256'),
-                coreWindow.crypto.subtle
-                  .importKey('raw', new TextEncoder().encode(rdToken), options3, false, ['sign'])
-                  .then(function (result) {
-                    return coreWindow.crypto.subtle.sign(
-                      'HMAC',
-                      result,
-                      new TextEncoder().encode(rdToken + '|' + timestamp + '|' + nonce)
-                    );
-                  })
-                  .then(function (result) {
-                    return Array.prototype.map
-                      .call(new Uint8Array(result), function (arg) {
-                        return arg.toString(16).padStart(2, '0');
-                      })
-                      .join('');
-                  }).catch(function () {
-                    return '';
-                  })
+              return subtle
+                .importKey('raw', new TextEncoder().encode(rdToken), (options3.name = 'HMAC'), false, [
+                  'sign'
+                ])
+                .then(function (result) {
+                  return subtle.sign(
+                    'HMAC',
+                    result,
+                    new TextEncoder().encode(rdToken + '|' + timestamp + '|' + nonce)
+                  );
+                })
+                .then(bytesToHex)
+                .catch(function () {
+                  return '';
+                });
+            } catch (err) {
+              return Promise.resolve('');
+            }
+          }
+          // Fallback: HMAC-SHA256 thuần JS nếu crypto.subtle không khả dụng.
+          try {
+            if (typeof globalThis !== 'undefined' && globalThis.asyncHmacSha256) {
+              return globalThis.asyncHmacSha256(
+                rdToken,
+                rdToken + '|' + timestamp + '|' + nonce
               );
             }
           } catch (err) {}
+          log('crypto.subtle không khả dụng, gửi sig rỗng — có thể bị từ chối.', 'warn');
           return Promise.resolve('');
         };
         signPayload()
@@ -2829,9 +2861,7 @@
               'x-hy3n-fp': fingerprint,
               'x-hy3n-nonce': nonce,
               'x-hy3n-sig': signature,
-              'x-hy3n-time': String(
-                coreWindow.performance ? coreWindow.performance.now() : Date.now() % 100000
-              ),
+              'x-hy3n-time': String(Date.now()),
               'x-hy3n-token': rdToken,
               'x-hy3n-ts': String(timestamp)
             };
@@ -3198,11 +3228,12 @@
             ticks > 80 && (clearInterval(readyTimer), log('Core live khởi tạo thất bại.', 'error'));
         }, 500);
     }
-    function ensureCore(rdToken, done) {
+    function ensureCore(rdToken, done, freshConfig) {
       if (coreCtx && coreCtx.rd === rdToken) {
         done(coreCtx);
         return;
       }
+      var cfg = freshConfig || {};
       gunzipBase64(CORE_GZIP_BASE64)
         .then(function (coreBuffer) {
           var iframeEl = document.createElement('iframe');
@@ -3222,14 +3253,14 @@
             );
           }
           frameWindow.rd = rdToken;
-          frameWindow.ad = 5;
-          frameWindow.w1 = 59;
-          frameWindow.w2 = 17;
-          frameWindow.w3 = 13;
+          frameWindow.ad = cfg.ad !== null && cfg.ad !== undefined ? cfg.ad : 5;
+          frameWindow.w1 = cfg.w1 !== null && cfg.w1 !== undefined ? cfg.w1 : 59;
+          frameWindow.w2 = cfg.w2 !== null && cfg.w2 !== undefined ? cfg.w2 : 17;
+          frameWindow.w3 = cfg.w3 !== null && cfg.w3 !== undefined ? cfg.w3 : 13;
           frameWindow.__OCTO_UA = USER_AGENT;
-          frameWindow.dm = 'https://octolink.vip';
-          frameWindow.fk = 'M2RQ5p2PSvKS3xGlZlh4';
-          frameWindow.fr = '';
+          frameWindow.dm = cfg.dm || 'https://octolink.vip';
+          frameWindow.fk = cfg.fk || 'M2RQ5p2PSvKS3xGlZlh4';
+          frameWindow.fr = cfg.fr || '';
           frameWindow.__decryptNew = function (payload) {
             if (!payload || payload.length < 2) return null;
             var version = payload[0];
@@ -3342,6 +3373,51 @@
           }
         });
     }
+    const DECOY_TEXT_RAW =
+      'co trinh khong ma reverse vay em dung dung AI LLM de reverse';
+    // Phân tích body trả về từ server: trả {isDecoy, body} đã strip mồi (nếu có).
+    function processDecoyBody(body) {
+      if (!body || body.length === 0) return { isDecoy: false, body: body };
+      var decoyBytes = null;
+      try {
+        decoyBytes = new TextEncoder().encode(DECOY_TEXT_RAW);
+      } catch (err) {
+        decoyBytes = [];
+        for (var bi = 0; bi < DECOY_TEXT_RAW.length; bi++)
+          decoyBytes.push(DECOY_TEXT_RAW.charCodeAt(bi) & 255);
+      }
+      var decoyLen = decoyBytes.length;
+      // Trường hợp 1: toàn bộ body là mồi (lặp lại 60-byte block)
+      if (body.length >= decoyLen && body.length % decoyLen === 0) {
+        var pureDecoy = true;
+        for (var a = 0; a < body.length && pureDecoy; a += decoyLen) {
+          for (var b = 0; b < decoyLen; b++) {
+            if (body[a + b] !== decoyBytes[b]) {
+              pureDecoy = false;
+              break;
+            }
+          }
+        }
+        if (pureDecoy) return { isDecoy: true, body: body };
+      }
+      // Trường hợp 2: mồi ở đầu, payload thật phía sau — strip 60 byte
+      if (body.length > decoyLen) {
+        var startsWithDecoy = true;
+        for (var c = 0; c < decoyLen; c++) {
+          if (body[c] !== decoyBytes[c]) {
+            startsWithDecoy = false;
+            break;
+          }
+        }
+        if (startsWithDecoy) {
+          var stripped = body.slice(decoyLen);
+          if (!stripped || stripped.length === 0)
+            return { isDecoy: true, body: body };
+          return { isDecoy: false, body: stripped };
+        }
+      }
+      return { isDecoy: false, body: body };
+    }
     function checkJob(rdToken, targetUrl, attempt, source) {
       if (missionHalted) return;
       if (attempt > 3)
@@ -3354,11 +3430,70 @@
           showManualDomainForm()
         );
       apiOrigin = originOf(targetUrl);
+      function readJsconfigFresh(text) {
+        if (!text) return {};
+        function rn(name) {
+          var m = text.match(new RegExp('(?:var\\s+)?' + name + '\\s*=\\s*(\\d+)'));
+          return m ? parseInt(m[1]) : null;
+        }
+        function rs(name) {
+          var m = text.match(new RegExp('var\\s+' + name + '\\s*=\\s*"([^"]*)"'));
+          return m ? m[1] : null;
+        }
+        return {
+          w1: rn('w1'),
+          w2: rn('w2'),
+          w3: rn('w3'),
+          ad: rn('ad'),
+          fk: rs('fk'),
+          fr: rs('fr'),
+          dm: rs('dm')
+        };
+      }
+      safeRequest({
+        method: 'GET',
+        url: 'https://octolink.vip/statics/jsconfig.js',
+        timeout: 0xea60,
+        anonymous: true,
+        headers: {
+          accept: '*/*',
+          referer: targetUrl,
+          ['user-agent']: USER_AGENT
+        },
+        onload: function (freshResp) {
+          try {
+            collectCookies(freshResp && freshResp.responseHeaders);
+          } catch (err) {}
+          var freshConfig = readJsconfigFresh(freshResp && freshResp.responseText);
+          var freshRd = freshConfig && extractRd(freshResp && freshResp.responseText);
+          if (freshRd) rdToken = freshRd;
+          runWithCore(freshConfig);
+        },
+        onerror: function () {
+          runWithCore(null);
+        },
+        ontimeout: function () {
+          runWithCore(null);
+        }
+      });
+      function runWithCore(freshConfig) {
       ensureCore(rdToken, function (ctx) {
         if (!ctx || !ctx.w) {
           log('Không dựng được core. Kích hoạt nhập thủ công.', 'error');
           showManualDomainForm();
           return;
+        }
+        if (freshConfig) {
+          try {
+            var _fw = ctx.w;
+            if (freshConfig.w1 !== null && freshConfig.w1 !== undefined) _fw.w1 = freshConfig.w1;
+            if (freshConfig.w2 !== null && freshConfig.w2 !== undefined) _fw.w2 = freshConfig.w2;
+            if (freshConfig.w3 !== null && freshConfig.w3 !== undefined) _fw.w3 = freshConfig.w3;
+            if (freshConfig.ad !== null && freshConfig.ad !== undefined) _fw.ad = freshConfig.ad;
+            if (freshConfig.fk) _fw.fk = freshConfig.fk;
+            if (freshConfig.fr !== null && freshConfig.fr !== undefined) _fw.fr = freshConfig.fr;
+            if (freshConfig.dm) _fw.dm = freshConfig.dm;
+          } catch (err) {}
         }
         try {
           var w = ctx.w;
@@ -3427,22 +3562,8 @@
                           checkJob(rdToken, targetUrl, attempt + 1, source);
                         }, 3000)
                       );
-                    var isDecoy = false;
-                    if (body.length >= 61 && body.length % 61 === 0) {
-                      var DECOY_TEXT =
-                        'co trinh khong ma reverse vay em dung dung AI LLM de reverse';
-                      isDecoy = true;
-                      var blockCount = body.length / 61;
-                      for (var j = 0; j < blockCount && isDecoy; j++) {
-                        for (var k = 0; k < 8; k++) {
-                          if (body[j * 61 + k] !== DECOY_TEXT.charCodeAt(k)) {
-                            isDecoy = false;
-                            break;
-                          }
-                        }
-                      }
-                    }
-                    if (isDecoy)
+                    var processed = processDecoyBody(body);
+                    if (processed.isDecoy)
                       return (
                         log(
                           'Server trả mồi chống-bot (phiên bị đánh dấu). Đăng ký lại fp/raw và thử lại sau 6s...',
@@ -3454,24 +3575,14 @@
                           });
                         }, 6000)
                       );
-                    if (body.length > 100) {
-                      var DECOY_TEXT2 =
-                          'co trinh khong ma reverse vay em dung dung AI LLM de reverse',
-                        decoyBytes = new TextEncoder().encode(DECOY_TEXT2);
-                      if (body.length >= decoyBytes.length) {
-                        var startsWithDecoy = true;
-                        for (var m = 0; m < decoyBytes.length; m++) {
-                          if (body[m] !== decoyBytes[m]) {
-                            startsWithDecoy = false;
-                            break;
-                          }
-                        }
-                        if (startsWithDecoy) {
-                          // BUGFIX: bỏ 60 byte mồi ở đầu, giữ payload thật phía sau
-                          body = body.slice(decoyBytes.length);
-                        }
-                      }
-                    }
+                    body = processed.body;
+                    if (!body || body.length === 0)
+                      return (
+                        log('Phản hồi rỗng sau khi bỏ mồi (Thử lại ' + (attempt + 1) + '/4)...', 'warn'),
+                        setTimeout(function () {
+                          checkJob(rdToken, targetUrl, attempt + 1, source);
+                        }, 3000)
+                      );
                     try {
                       w.__se331(body);
                       job = w.__se4ce(body);
@@ -3637,7 +3748,8 @@
         } catch (err) {
           log('Lỗi callback core: ' + err.message, 'error');
         }
-      });
+      }, freshConfig);
+      }
     }
     // waitRound: số lần server chủ động bảo "chờ chặng" — KHÔNG phải lỗi, nên
     // đếm riêng với hạn cao hơn nhiều so với attempt (lỗi thật: mạng/giải mã).
@@ -3736,21 +3848,8 @@
               }, 3000)
             );
           }
-          var isDecoy = false;
-          if (body.length >= 61 && body.length % 61 === 0) {
-            var DECOY_TEXT = 'co trinh khong ma reverse vay em dung dung AI LLM de reverse';
-            isDecoy = true;
-            var blockCount = body.length / 61;
-            for (var n = 0; n < blockCount && isDecoy; n++) {
-              for (var p = 0; p < 8; p++) {
-                if (body[n * 61 + p] !== DECOY_TEXT.charCodeAt(p)) {
-                  isDecoy = false;
-                  break;
-                }
-              }
-            }
-          }
-          if (isDecoy)
+          var processed = processDecoyBody(body);
+          if (processed.isDecoy)
             return (
               log('Continue bị server trả mồi - đăng ký lại fp và chờ...', 'warn'),
               setTimeout(function () {
@@ -3781,21 +3880,23 @@
                 }
               }, 6000)
             );
-          if (body.length > 100) {
-            var DECOY_TEXT2 = 'co trinh khong ma reverse vay em dung dung AI LLM de reverse',
-              decoyBytes = new TextEncoder().encode(DECOY_TEXT2);
-            if (body.length >= decoyBytes.length) {
-              var startsWithDecoy = true;
-              for (var q = 0; q < decoyBytes.length; q++) {
-                if (body[q] !== decoyBytes[q]) {
-                  startsWithDecoy = false;
-                  break;
-                }
-              }
-              // BUGFIX: bỏ 60 byte mồi ở đầu, giữ payload thật phía sau
-              startsWithDecoy && (body = body.slice(decoyBytes.length));
-            }
-          }
+          body = processed.body;
+          if (!body || body.length === 0)
+            return (
+              log('Continue phản hồi rỗng sau khi bỏ mồi (Thử lại ' + (attempt + 1) + '/4)...', 'warn'),
+              setTimeout(function () {
+                sendContinue(
+                  rdToken,
+                  targetUrl,
+                  freshPayload,
+                  headers,
+                  coreWindow,
+                  step,
+                  attempt + 1,
+                  waitRound
+                );
+              }, 3000)
+            );
           try {
             coreWindow.__se331(body);
             job = coreWindow.__se4ce(body);
