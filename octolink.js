@@ -669,7 +669,10 @@
       panelBody.innerHTML = '';
     });
 
-    // ---- đổi link NV: xoá domain đã nhớ (kể cả khớp mờ sai) rồi nhập tay lại
+    // ---- đổi link NV: xoá domain đã nhớ (kể cả khớp mờ sai) rồi tải lại trang
+    // Reload là cách duy nhất giết hẳn tiến trình cũ (checkJob/sendContinue đang
+    // chạy ngầm với rd/domain cũ) — mọi callback cũ chết theo trang, không đè link mới.
+    // Cờ force-manual giữ trong session để sau reload không auto dính lại link sai.
     document.getElementById('oc-change-btn').addEventListener('click', function () {
       try {
         var rec = null;
@@ -684,21 +687,18 @@
         }
         try { memWrite(store); } catch (err) {}
         try { demoRetried = 0; } catch (err) {}
-        var old = document.getElementById('manual-input-container');
-        if (old && old.parentNode) old.parentNode.removeChild(old);
+        try {
+          if (missionId) sessionStorage.setItem('octo_force_manual_' + missionId, '1');
+        } catch (err) {}
         log(
-          gone.length
-            ? 'Đã xoá domain nhớ sai [' + gone.join(', ') + ']. Nhập link đúng vào ô dưới:'
-            : 'Không có domain nào được nhớ. Nhập link đúng vào ô dưới:',
+          'Đã xoá domain nhớ sai' +
+            (gone.length ? ' [' + gone.join(', ') + ']' : '') +
+            '. Đang tải lại để dừng hẳn tiến trình cũ...',
           'warn'
         );
-        try { showManualDomainForm(); } catch (err) {}
-        var inp = document.getElementById('manual-domain-input');
-        if (inp) {
-          inp.value = '';
-          try { inp.focus(); } catch (err) {}
-          try { inp.scrollIntoView({ block: 'nearest' }); } catch (err) {}
-        }
+        setTimeout(function () {
+          try { window.location.reload(); } catch (err) {}
+        }, 800);
       } catch (err) {
         log('Không đổi được link: ' + (err.message || err), 'error');
       }
@@ -2004,6 +2004,15 @@
         haltBlacklisted(missionId2, blockedBy);
         return;
       }
+      // --- vừa bấm 🔗 đổi link: bỏ qua mọi auto (recall + campaign cloud),
+      // vào thẳng nhập tay để không dính lại link sai ---------------------
+      try {
+        if (missionId2 && sessionStorage.getItem('octo_force_manual_' + missionId2)) {
+          log('Đã đổi link — nhập tên miền đúng thủ công.', 'warn');
+          showManualDomainForm();
+          return;
+        }
+      } catch (err) {}
       // --- tự điền từ nhiệm vụ đã làm trước đó ---------------------------
       var recalled = recallCampaign(missionId2, null);
       if (recalled && recalled.data.domain) {
@@ -2401,6 +2410,10 @@
         if (source === 'manual') {
           var el = document.getElementById('manual-input-container');
           if (el && el.parentNode) el.parentNode.removeChild(el);
+          // nhập tay chạy được rồi thì lần sau cho auto lại bình thường
+          try {
+            if (missionId) sessionStorage.removeItem('octo_force_manual_' + missionId);
+          } catch (err) {}
         }
         checkJob(rdMatch[1], targetUrl, 0, source);
       }
