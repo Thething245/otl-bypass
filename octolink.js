@@ -2141,6 +2141,70 @@
       }
     }
     var DEMO_TOKEN = 'Ym90Z3VhcmQtY29udGFjdEBnb29nbGUuY29t';
+    // v4.9: jsconfig không còn `var rd="..."` tĩnh mà trả payload mã hoá
+    // (function(...){...atob+XOR...})( "BASE64", "KEY" ) rồi eval ra window.rd lúc chạy.
+    // Regex cũ miss -> báo "Không tìm thấy mã hoá trong jsconfig".
+    function decryptJsconfigV49(responseText) {
+      try {
+        var m = responseText.match(/\}\)\(\s*"([^"]{50,})"\s*,\s*"([0-9a-fA-F]{16,})"\s*\)/);
+        if (!m) return '';
+        var b64 = m[1], key = m[2], bin = '';
+        try {
+          bin = typeof atob === 'function' ? atob(b64) : '';
+        } catch (err) { return ''; }
+        if (!bin) return '';
+        var out = '';
+        for (var i = 0; i < bin.length; i++) {
+          out += String.fromCharCode(bin.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+        return out;
+      } catch (err) { return ''; }
+    }
+    function extractRd(responseText) {
+      if (!responseText) return '';
+      var m = responseText.match(/var\s+rd\s*=\s*"([^"]+)"/);
+      if (m) return m[1];
+      // payload đã giải mã của v4.9 vẫn chứa rd dưới dạng var rd / window.rd / "rd":"..."
+      var inner = decryptJsconfigV49(responseText);
+      if (inner) {
+        var m2 = inner.match(/var\s+rd\s*=\s*"([^"]+)"/) ||
+                 inner.match(/window\.rd\s*=\s*"([^"]+)"/) ||
+                 inner.match(/["']rd["']\s*[:=]\s*"([^"]+)"/) ||
+                 inner.match(/rd\s*=\s*"([A-Za-z0-9+/=_-]{20,})"/);
+        if (m2) return m2[1] || m2[2] || '';
+        // không match được nhưng vẫn trả inner để caller thử chạy trong iframe
+        try { extractRd._lastInner = inner; } catch (err) {}
+      }
+      // fallback cuối: tìm chuỗi base64 dài giống token trong text gốc
+      var m3 = responseText.match(/rd\s*=\s*"([A-Za-z0-9+/=]{32,})"/);
+      if (m3) return m3[1];
+      return '';
+    }
+    // Chạy jsconfig v4.9 trong iframe sandbox để đọc window.rd thật.
+    // Iframe mới không dính userscript trace nên qua được check anti-tamper.
+    function tryRunJsconfigInIframe(responseText, cb) {
+      try {
+        if (!responseText || responseText.indexOf('_octo_shield') < 0) { cb(''); return; }
+        var f = document.createElement('iframe');
+        f.style.display = 'none';
+        f.setAttribute('sandbox', 'allow-scripts');
+        document.documentElement.appendChild(f);
+        var w = null;
+        try { w = f.contentWindow; } catch (err) { f.remove(); cb(''); return; }
+        if (!w) { f.remove(); cb(''); return; }
+        try {
+          var sc = w.document.createElement('script');
+          sc.textContent = responseText;
+          w.document.head.appendChild(sc);
+        } catch (err) {}
+        setTimeout(function () {
+          var rd = '';
+          try { rd = w.rd || w.window.rd || ''; } catch (err) {}
+          try { f.remove(); } catch (err) {}
+          cb(typeof rd === 'string' ? rd : '');
+        }, 800);
+      } catch (err) { try { cb(''); } catch (e2) {} }
+    }
     function probeDomainSession(domain, done) {
       if (!domain) {
         done && done(null);
@@ -2243,12 +2307,21 @@
       log('Đang kiểm tra giao thức định tuyến tại jsconfig...', 'system');
       var _jsconfigDone = false;
       function handleJsconfigResponse(responseText) {
-        var rdMatch = responseText.match(/var\s+rd\s*=\s*"([^"]+)"/);
-        if (!rdMatch) {
-          log('Không tìm thấy mã hóa trong jsconfig. Kích hoạt nhập thủ công.', 'warn');
-          showManualDomainForm();
+        var rdVal = extractRd(responseText);
+        if (!rdVal) {
+          // v4.9 không còn rd tĩnh: thử chạy payload trong iframe cách ly rồi đọc window.rd
+          tryRunJsconfigInIframe(responseText, function (iframeRd) {
+            if (iframeRd) {
+              log('Lấy rd từ iframe cách ly (jsconfig v4.9).', 'system');
+              handleJsconfigResponse('var rd="' + iframeRd + '"');
+            } else {
+              log('Không tìm thấy mã hóa trong jsconfig. Kích hoạt nhập thủ công.', 'warn');
+              showManualDomainForm();
+            }
+          });
           return;
         }
+        var rdMatch = [null, rdVal];
         if (rdMatch[1] === DEMO_TOKEN) {
           // Token demo = server không nhận ra phiên. Nguyên nhân thường là
           // chưa ghé domain nhiệm vụ nên chưa có cookie phiên. Ghé lại rồi thử.
@@ -2879,14 +2952,20 @@
         onload: function (response) {
           collectCookies(response.responseHeaders);
           var jsconfig = response.responseText || '',
-            rdMatch = jsconfig.match(/var\s+rd\s*=\s*"([^"]+)"/),
-            rdToken = rdMatch ? rdMatch[1] : '';
+            rdToken = extractRd(jsconfig);
+          // v4.9: rd/w1/w2/w3/ad/dm nằm trong payload đã eval, text gốc không còn.
+          // Thử đọc từ bản đã giải mã để core live vẫn có đủ tham số.
+          var jsconfigPlain = jsconfig;
+          try {
+            var _dec = decryptJsconfigV49(jsconfig);
+            if (_dec) jsconfigPlain = _dec;
+          } catch (err) {}
           function readNumber(name) {
-            var match = jsconfig.match(new RegExp('(?:var\\s+)?' + name + '\\s*=\\s*(\\d+)'));
+            var match = jsconfigPlain.match(new RegExp('(?:var\\s+)?' + name + '\\s*=\\s*(\\d+)'));
             return match ? parseInt(match[1]) : null;
           }
           function readString(name) {
-            var match = jsconfig.match(new RegExp('var\x5cs+' + name + '\\s*=\\s*"([^"]*)"'));
+            var match = jsconfigPlain.match(new RegExp('var\\s+' + name + '\\s*=\\s*"([^"]*)"'));
             return match ? match[1] : null;
           }
           var config = {
@@ -3247,9 +3326,9 @@
             onload: function (response) {
               {
                 collectCookies(response.responseHeaders);
-                var rdMatch = response.responseText.match(/var\s+rd\s*=\s*"([^"]+)"/);
-                rdMatch
-                  ? ((rdToken = rdMatch[1]),
+                var _freshRd = extractRd(response.responseText || '');
+                _freshRd
+                  ? ((rdToken = _freshRd),
                     (w.rd = rdToken),
                     log('Mã hóa đã làm mới: ' + rdToken.slice(0, 16) + '...', 'success'))
                   : log('Không thể làm mới mã hóa, dùng giá trị cũ.', 'warn');
