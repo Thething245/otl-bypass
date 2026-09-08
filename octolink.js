@@ -534,6 +534,7 @@
       '</div>' +
       '<div class="oc-actions">' +
       '<button id="oc-bl-btn" class="lux-btn" title="Danh sách chặn" aria-label="Danh sách chặn">⛔</button>' +
+      '<button id="oc-change-btn" class="lux-btn" title="Đổi link nhiệm vụ (xoá domain đã nhớ)" aria-label="Đổi link">🔗</button>' +
       '<button id="oc-clear-btn" class="lux-btn" title="Xoá log" aria-label="Xoá log">⌫</button>' +
       '<button id="lux-toggle-btn" class="lux-btn" title="Thu nhỏ / Phóng to" aria-label="Thu nhỏ">−</button>' +
       '</div>';
@@ -666,6 +667,41 @@
     // ---- clear log ---------------------------------------------------------
     document.getElementById('oc-clear-btn').addEventListener('click', function () {
       panelBody.innerHTML = '';
+    });
+
+    // ---- đổi link NV: xoá domain đã nhớ (kể cả khớp mờ sai) rồi nhập tay lại
+    document.getElementById('oc-change-btn').addEventListener('click', function () {
+      try {
+        var rec = null;
+        try { rec = recallCampaign(missionId, null); } catch (err) {}
+        var store = {};
+        try { store = memRead(); } catch (err) { store = {}; }
+        var gone = [];
+        if (missionId && store[missionId]) { delete store[missionId]; gone.push(missionId); }
+        if (rec && rec.key && store[rec.key]) {
+          delete store[rec.key];
+          if (gone.indexOf(rec.key) < 0) gone.push(rec.key);
+        }
+        try { memWrite(store); } catch (err) {}
+        try { demoRetried = 0; } catch (err) {}
+        var old = document.getElementById('manual-input-container');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        log(
+          gone.length
+            ? 'Đã xoá domain nhớ sai [' + gone.join(', ') + ']. Nhập link đúng vào ô dưới:'
+            : 'Không có domain nào được nhớ. Nhập link đúng vào ô dưới:',
+          'warn'
+        );
+        try { showManualDomainForm(); } catch (err) {}
+        var inp = document.getElementById('manual-domain-input');
+        if (inp) {
+          inp.value = '';
+          try { inp.focus(); } catch (err) {}
+          try { inp.scrollIntoView({ block: 'nearest' }); } catch (err) {}
+        }
+      } catch (err) {
+        log('Không đổi được link: ' + (err.message || err), 'error');
+      }
     });
 
     // ---- drag by header ----------------------------------------------------
