@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.7.0
+// @version      2.7.1
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -557,7 +557,8 @@
     }
     // ---- Cache creep xuyên domain (GM storage dùng chung mọi @match) ----
     var CREEP_GM_KEY = 'octo_creep_fp_v1';
-    var CREEP_LIB_GM_KEY = 'octo_shield_lib_v1';
+    // v2: cache v1 dính 2 URL rác WordPress (ads.js/script.min.js) — bỏ.
+    var CREEP_LIB_GM_KEY = 'octo_shield_lib_v2';
     function gmReadCreep() {
       try {
         var raw = null;
