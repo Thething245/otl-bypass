@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.11.0
+// @version      2.12.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -4367,7 +4367,10 @@
         method: 'GET',
         url: 'https://octolink.vip/statics/jsconfig.js',
         timeout: 0xea60,
-        anonymous: true,
+        // KHÔNG anonymous: mọi request octolink phải chung 1 ngữ cảnh cookie/
+        // phiên. anonymous (không gửi/nhận cookie jar) khiến rd lấy về thuộc
+        // phiên khác với phiên của /fp/raw + /check/job -> server thấy 2
+        // thiết bị/phiên khác nhau giữa các bước ("đổi thiết bị").
         headers: {
           accept: '*/*',
           referer: targetUrl,
@@ -4414,7 +4417,7 @@
             method: 'GET',
             url: 'https://octolink.vip/statics/jsconfig.js',
             timeout: 0xea60,
-            anonymous: true,
+            // Như trên: giữ chung ngữ cảnh cookie, không anonymous.
             headers: {
               accept: '*/*',
               referer: targetUrl,
