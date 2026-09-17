@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.7.1
+// @version      2.8.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -789,6 +789,49 @@
         }
       });
     }
+    // ---- Lau cờ userscript AN TOÀN (không wrap hàm bundle) ----
+    // Lau cờ userscript trong directjscd BẰNG GÁN THƯỜNG trên plain object.
+    // TUYỆT ĐỐI KHÔNG wrap/defineProperty lên hàm của bundle (__b110671):
+    // bundle tự check toàn vẹn (toString/tham chiếu) từ bên trong iframe và
+    // bật cờ `tamper` -> server báo "can thiệp trình duyệt". Bản cũ wrap
+    // __b110671 để scrub mỗi lần gọi — chính là tự tố cáo.
+    function scrubDirectjscdFlags(coreWindow) {
+      try {
+        var d = coreWindow.directjscd;
+        if (!d || typeof d !== 'object') return;
+        try { if (d.userscript !== undefined) d.userscript = 0; } catch (e1) {}
+        try { if ('userscript_score' in d && d.userscript_score) d.userscript_score = 0; } catch (e2) {}
+        try { if (d.gm_apis) d.gm_apis = false; } catch (e3) {}
+        try { if (d.extension_runtime) d.extension_runtime = false; } catch (e4) {}
+        try {
+          var lu = d.layered_userscript;
+          if (lu && typeof lu === 'object') {
+            if (lu.score) lu.score = 0;
+            if (Array.isArray(lu.detections) && lu.detections.length)
+              lu.detections = lu.detections.filter(function (x) {
+                return !/userscript|tampermonkey|greasemonkey|violentmonkey/i.test(
+                  String((x && x.kind) || x.name || x));
+              });
+          }
+        } catch (e5) {}
+        try {
+          var tm = d.timing;
+          if (tm && typeof tm === 'object' && tm.score && tm.score > 100) tm.score = 0;
+        } catch (e6) {}
+      } catch (err) {}
+    }
+    // Ghi creep vào core + lau cờ userscript (1 chỗ duy nhất, không wrap hàm).
+    function syncCreepIntoCore(coreWindow, fp, isFallback) {
+      try {
+        coreWindow.__creep_fp = fp;
+        coreWindow.__creep_fallback = !!isFallback;
+        coreWindow.directjscd = coreWindow.directjscd || {};
+        coreWindow.directjscd.creep_visitor = fp;
+        coreWindow.directjscd.finger = fp;
+        coreWindow.directjscd.visitorId = fp;
+      } catch (err) {}
+      try { scrubDirectjscdFlags(coreWindow); } catch (e2) {}
+    }
     // ---- Moi creep từ chính bundle guard (rawfp.js 2MB) ----
     // Bundle thu thập canvas/webgl/audio/fonts... nên visitorId thật nhiều khả
     // năng nằm sẵn trong exports của nó dưới tên khác (visitorId/finger/...).
@@ -972,15 +1015,11 @@
           // 2. Copy fp đã có từ trang chính.
           var mainFp = getMainCreepFp();
           if (mainFp) {
-            try { coreWindow.__creep_fp = mainFp; } catch (err) {}
+            syncCreepIntoCore(coreWindow, mainFp, false);
             try {
-              coreWindow.directjscd = coreWindow.directjscd || {};
-              coreWindow.directjscd.creep_visitor = mainFp;
               if (!coreWindow.directjscd.creep_trust) coreWindow.directjscd.creep_trust = 95;
               if (coreWindow.directjscd.creep_lies === undefined) coreWindow.directjscd.creep_lies = 0;
-              coreWindow.directjscd.finger = mainFp;
-              coreWindow.directjscd.visitorId = mainFp;
-            } catch (err) {}
+            } catch (eTl) {}
             try {
               if (coreWindow.sessionStorage)
                 coreWindow.sessionStorage.setItem(CREEP_SS_KEY, mainFp);
@@ -1065,14 +1104,7 @@
           var fast = readCoreFp(true);
           if (fast) {
             // Đồng bộ ngược vào core rồi resolve ngay (không chờ hết timeout).
-            try {
-              coreWindow.__creep_fp = fast;
-              coreWindow.__creep_fallback = false;
-              coreWindow.directjscd = coreWindow.directjscd || {};
-              coreWindow.directjscd.creep_visitor = fast;
-              coreWindow.directjscd.finger = fast;
-              coreWindow.directjscd.visitorId = fast;
-            } catch (err) {}
+            syncCreepIntoCore(coreWindow, fast, false);
             resolve(fast);
             return;
           }
@@ -1082,14 +1114,7 @@
             var f = readCoreFp(true);
             if (f) {
               clearInterval(iv);
-              try {
-                coreWindow.__creep_fp = f;
-                coreWindow.__creep_fallback = false;
-                coreWindow.directjscd = coreWindow.directjscd || {};
-                coreWindow.directjscd.creep_visitor = f;
-                coreWindow.directjscd.finger = f;
-                coreWindow.directjscd.visitorId = f;
-              } catch (err) {}
+              syncCreepIntoCore(coreWindow, f, false);
               resolve(f);
               return;
             }
@@ -1103,14 +1128,11 @@
               try {
                 var fb = genLocalDeviceFp();
                 if (fb) {
-                  coreWindow.__creep_fp = fb;
-                  coreWindow.directjscd = coreWindow.directjscd || {};
-                  coreWindow.directjscd.creep_visitor = fb;
-                  if (!coreWindow.directjscd.creep_trust) coreWindow.directjscd.creep_trust = 95;
-                  if (coreWindow.directjscd.creep_lies === undefined) coreWindow.directjscd.creep_lies = 0;
-                  coreWindow.directjscd.finger = fb;
-                  coreWindow.directjscd.visitorId = fb;
-                  coreWindow.__creep_fallback = true;
+                  syncCreepIntoCore(coreWindow, fb, true);
+                  try {
+                    if (!coreWindow.directjscd.creep_trust) coreWindow.directjscd.creep_trust = 95;
+                    if (coreWindow.directjscd.creep_lies === undefined) coreWindow.directjscd.creep_lies = 0;
+                  } catch (eTrust) {}
                   log('Dùng fp thiết bị tự tạo (fallback) — server có thể vẫn từ chối nếu verify thuật toán.', 'warn');
                   resolve(fb);
                   return;
@@ -3469,6 +3491,8 @@
     }
     function registerRawFingerprint(coreWindow, done) {
       try {
+        // Lau cờ userscript (gán thường, không wrap) trước khi build payload.
+        try { scrubDirectjscdFlags(coreWindow); } catch (eScrub) {}
         var rdToken = coreWindow.rd || '',
           timestamp = Math.floor(Date.now() / 1000),
           ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
@@ -3878,37 +3902,9 @@
           } catch (err) {}
           if (coreReady) {
             clearInterval(readyTimer);
-            try {
-              if (typeof frameWindow.__b110671 === 'function' && !frameWindow.__b110671.__sealed) {
-                var __b110671 = frameWindow.__b110671;
-                frameWindow.__b110671 = function () {
-                  try {
-                    var directjscd = frameWindow.directjscd;
-                    if (directjscd && typeof directjscd === 'object') {
-                      directjscd.userscript = 0;
-                      if ('userscript_score' in directjscd) directjscd.userscript_score = 0;
-                      directjscd.gm_apis = false;
-                      directjscd.extension_runtime = false;
-                      var layered_userscript = directjscd.layered_userscript;
-                      if (layered_userscript) {
-                        layered_userscript.score = 0;
-                        if (Array.isArray(layered_userscript.detections))
-                          layered_userscript.detections.length = 0;
-                      }
-                      var timing = directjscd.timing;
-                      if (timing && typeof timing === 'object') timing.score = 0;
-                    }
-                  } catch (err) {}
-                  return __b110671();
-                };
-                try {
-                  var sealDescriptor = {
-                    value: true
-                  };
-                  Object.defineProperty(frameWindow.__b110671, '__sealed', sealDescriptor);
-                } catch (err) {}
-              }
-            } catch (err) {}
+            // Lau cờ userscript bằng gán thường (KHÔNG wrap __b110671 —
+            // wrap là prototype lie, bundle bật cờ tamper).
+            try { scrubDirectjscdFlags(frameWindow); } catch (err) {}
             var ctx = {
               rd: config.rd,
               w: frameWindow
@@ -4021,10 +4017,9 @@
           var scriptEl2 = frameDoc.createElement('script');
           scriptEl2.textContent = buildDirectjscdScript();
           frameDoc.body.appendChild(scriptEl2);
-          var scriptEl3 = frameDoc.createElement('script');
-          scriptEl3.textContent =
-            '(function(){function _sealCd(){try{var d=window.directjscd;if(!d||typeof d!=="object")return;try{if(d.userscript!==undefined)d.userscript=0;}catch(e){}try{if("userscript_score"in d&&d.userscript_score)d.userscript_score=0;}catch(e){}try{if(d.gm_apis)d.gm_apis=false;}catch(e){}try{if(d.extension_runtime)d.extension_runtime=false;}catch(e){}try{var lu=d.layered_userscript;if(lu&&typeof lu==="object"){if(lu.score)lu.score=0;if(Array.isArray(lu.detections)&&lu.detections.length)lu.detections=lu.detections.filter(function(x){return !/userscript|tampermonkey|greasemonkey|violentmonkey/i.test(String((x&&x.kind)||x.name||x));});}}catch(e){}try{var tm=d.timing;if(tm&&typeof tm==="object"&&tm.score&&tm.score>100)tm.score=0;}catch(e){}try{if(window.__creep_fp&&(!d.creep_visitor||d.creep_visitor!==window.__creep_fp)){d.creep_visitor=window.__creep_fp;d.finger=window.__creep_fp;d.visitorId=window.__creep_fp;if(!d.creep_trust)d.creep_trust=95;if(d.creep_lies===undefined)d.creep_lies=0;}}catch(e){}}catch(e){}}var _origB=window.__b110671;if(typeof _origB==="function"&&!_origB.__sealed){window.__b110671=function(){_sealCd();return _origB();};try{Object.defineProperty(window.__b110671,"__sealed",{value:true});}catch(e){}}else{var _iv=setInterval(function(){if(typeof window.__b110671==="function"&&!window.__b110671.__sealed){var _o=window.__b110671;window.__b110671=function(){_sealCd();return _o();};try{Object.defineProperty(window.__b110671,"__sealed",{value:true});}catch(e){}clearInterval(_iv);}},80);}})();';
-          frameDoc.body.appendChild(scriptEl3);
+          // KHÔNG chèn seal wrap __b110671 nữa (prototype lie -> cờ tamper).
+          // Scrub + creep sync thực hiện từ main world (scrubDirectjscdFlags /
+          // syncCreepIntoCore) trước mỗi lần gọi __b110671().
           var scriptEl4 = frameDoc.createElement('script');
           scriptEl4.textContent = new TextDecoder('utf-8').decode(new Uint8Array(coreBuffer));
           frameDoc.body.appendChild(scriptEl4);
