@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.9.0
+// @version      2.10.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
 // @match        *://linkhuongdan.online/*
 // @match        *://totreview.com/*
 // @match        *://octolink.vip/*
+// @match        *://link999.app/*
+// @match        *://*.link999.app/*
 // @match        *://*.minuc.vn/*
 // @match        *://*.linkhuongdan.online/*
 // @match        *://*.totreview.com/*
@@ -40,6 +42,14 @@
   // không giải được nữa. Phải return TRƯỚC khi chạm vào bất cứ thứ gì,
   // không chỉ trước main().
   // ====================================================================
+  // Helper nhận diện host họ Octolink (octolink.vip + link999.app mirror).
+  function __isOctoHost(h) {
+    try {
+      h = String(h || '').toLowerCase();
+      return h === 'octolink.vip' || h.slice(-13) === '.octolink.vip' ||
+             h === 'link999.app' || h.slice(-12) === '.link999.app';
+    } catch (err) { return false; }
+  }
   // Thu creep THẬT thụ động trên trang captcha /finish (chỉ ĐỌC window +
   // sessionStorage + gọi DeviceShield.get() sẵn có của site — không chạm DOM,
   // không request mạng nên an toàn captcha). Lưu GM cho tab nhiệm vụ dùng lại.
@@ -47,7 +57,7 @@
     try {
       var host = '';
       try { host = String(window.location.hostname || '').toLowerCase(); } catch (e0) {}
-      if (host !== 'octolink.vip' && host.slice(-13) !== '.octolink.vip') return;
+      if (!__isOctoHost(host)) return;
       var KEY = '__octo_creep_fp', GMK = 'octo_creep_fp_v1', finished = false;
       function save(fp, trust, lies) {
         if (!fp || String(fp).length < 8 || finished) return;
@@ -79,7 +89,14 @@
           if (P && P.get && !window.__creep_fetching) {
             window.__creep_fetching = true;
             P.get().then(function (r) {
-              try { if (r && r.visitorId) save(r.visitorId, r.trustScore, r.lieCount); } catch (e5) {}
+              try {
+                var _fp0 = (r && (r.visitorId || r.finger)) || '';
+                if (_fp0 && String(_fp0).length >= 8) {
+                  var _tt0 = (r.trustScore != null ? r.trustScore : 95);
+                  var _ll0 = (r.lieCount != null ? r.lieCount : (r.lies ? r.lies.length : 0));
+                  save(_fp0, _tt0, _ll0);
+                }
+              } catch (e5) {}
             }).catch(function () {});
           }
         } catch (e6) {}
@@ -100,7 +117,7 @@
   try {
     var _h = String(window.location.hostname || '').toLowerCase();
     var _p = String(window.location.pathname || '');
-    var _isOcto = _h === 'octolink.vip' || _h.slice(-13) === '.octolink.vip';
+    var _isOcto = __isOctoHost(_h);
     if (_isOcto && /^\/+finish(\/|$)/i.test(_p)) {
       console.log('[Octo] Trang captcha — script tự tắt để không cản việc giải captcha.');
       try { __octoPassiveCreepHarvest(); } catch (eHv) {}
@@ -584,16 +601,17 @@
               window.__creep_fetching = true;
               P.get().then(function (r) {
                 try {
-                  if (r && r.visitorId) {
-                    window.__creep_fp = r.visitorId;
+                  var _n = normCreepResult(r);
+                  if (_n) {
+                    window.__creep_fp = _n.fp;
                     if (window.directjscd && typeof window.directjscd === 'object') {
-                      window.directjscd.creep_visitor = r.visitorId;
-                      window.directjscd.creep_trust = r.trustScore;
-                      window.directjscd.creep_lies = r.lieCount;
+                      window.directjscd.creep_visitor = _n.fp;
+                      window.directjscd.creep_trust = _n.trust;
+                      window.directjscd.creep_lies = _n.lies;
                     }
-                    try { sessionStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e2) {}
-                    try { localStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e3) {}
-                    try { gmWriteCreep(r.visitorId, r.trustScore, r.lieCount); } catch (e5b) {}
+                    try { sessionStorage.setItem(CREEP_SS_KEY, _n.fp); } catch (e2) {}
+                    try { localStorage.setItem(CREEP_SS_KEY, _n.fp); } catch (e3) {}
+                    try { gmWriteCreep(_n.fp, _n.trust, _n.lies); } catch (e5b) {}
                   }
                 } catch (e4) {}
               }).catch(function () {});
@@ -638,6 +656,18 @@
         try { if (typeof GM_setValue === 'function') GM_setValue(CREEP_GM_KEY, text); } catch (e2) {}
         try { localStorage.setItem(CREEP_GM_KEY, text); } catch (e3) {}
       } catch (err) {}
+    }
+    // Chuẩn hoá kết quả DeviceShield.get() (v3/v4 khác tên field: v4 trả
+    // `lies` mảng, có thể không có `lieCount`).
+    function normCreepResult(r) {
+      try {
+        if (!r) return null;
+        var fp = r.visitorId || r.finger || r.creep_visitor || '';
+        if (!fp || String(fp).length < 8) return null;
+        var trust = (r.trustScore != null ? r.trustScore : 95);
+        var lies = (r.lieCount != null ? r.lieCount : (r.lies ? r.lies.length : 0));
+        return { fp: String(fp), trust: trust, lies: lies };
+      } catch (err) { return null; }
     }
     // Fallback cuối cùng khi không đâu có fp thật: tự tạo fp thiết bị ỔN ĐỊNH
     // từ tín hiệu THẬT (canvas/webgl/UA/màn hình — không spoof nên lies=0).
@@ -730,7 +760,10 @@
         },
         onload: function (resp) {
           var src = resp.responseText || '';
+          // Chỉ nhận lib fingerprint thật, loại HTML lỗi/trang WP rác.
           if (src.length < 1000) return;
+          if (src.indexOf('DeviceShield') < 0 && src.indexOf('CreepJS') < 0 &&
+              src.indexOf('visitorId') < 0) return;
           // Bỏ qua core đã biết (tránh chèn trùng shortearn/rawfp/jsconfig).
           var low = url.toLowerCase();
           if (low.indexOf('shortearn') >= 0 || low.indexOf('rawfp') >= 0 ||
@@ -750,6 +783,16 @@
         if ((coreWindow.DeviceShield && coreWindow.DeviceShield.get) ||
             (coreWindow.CreepJS && coreWindow.CreepJS.get)) return;
       } catch (err) { return; }
+      // Lib gốc (người dùng moi từ link999.app) — ưu tiên cao nhất, khỏi dò.
+      try {
+        var HARDCODED_SHIELD = [
+          'https://link999.app/js/device-shield.v4.min.js',
+          'https://octolink.vip/js/device-shield.v4.min.js'
+        ];
+        for (var hi = 0; hi < HARDCODED_SHIELD.length; hi++) {
+          try { fetchAndInjectShieldLib(coreWindow, HARDCODED_SHIELD[hi]); } catch (eH) {}
+        }
+      } catch (err) {}
       var cached = shieldLibUrlsCached();
       var i;
       if (cached.length) {
@@ -943,9 +986,36 @@
             if (typeof v === 'function' && deep && /visitor|creep|finger|shield|trust|lies|attest|proof|device/i.test(k)) {
               try {
                 var r = v.call(mod);
-                if (r && typeof r === 'object' && r.visitorId) {
-                  found = String(r.visitorId);
-                  try { coreWindow.__creep_trust = r.trustScore; coreWindow.__creep_lies = r.lieCount; } catch (e9) {}
+                // Getter async kiểu DeviceShield.get() -> Promise: móc then để
+                // poll loop nhặt sau, không chặn.
+                if (r && typeof r.then === 'function') {
+                  (function (_kk) {
+                    try {
+                      r.then(function (ar) {
+                        try {
+                          var _na = normCreepResult(ar);
+                          if (_na) {
+                            coreWindow.__creep_fp = _na.fp;
+                            coreWindow.__creep_fallback = false;
+                            coreWindow.directjscd = coreWindow.directjscd || {};
+                            coreWindow.directjscd.creep_visitor = _na.fp;
+                            coreWindow.directjscd.finger = _na.fp;
+                            coreWindow.directjscd.visitorId = _na.fp;
+                            coreWindow.directjscd.creep_trust = _na.trust;
+                            coreWindow.directjscd.creep_lies = _na.lies;
+                            try { gmWriteCreep(_na.fp, _na.trust, _na.lies); } catch (ePa) {}
+                            log('Lấy creep async từ bundle fn: ' + _kk, 'success');
+                          }
+                        } catch (ePb) {}
+                      }).catch(function () {});
+                    } catch (ePc) {}
+                  })(k);
+                  continue;
+                }
+                var _nb = normCreepResult(r);
+                if (_nb) {
+                  found = _nb.fp;
+                  try { coreWindow.__creep_trust = _nb.trust; coreWindow.__creep_lies = _nb.lies; } catch (e9) {}
                   log('Lấy creep từ bundle fn: ' + k, 'success');
                   break;
                 }
@@ -970,9 +1040,36 @@
                 if (typeof sv === 'function' && deep && /visitor|creep|finger|shield/i.test(sk)) {
                   try {
                     var r2 = sv.call(v);
-                    if (r2 && typeof r2 === 'object' && r2.visitorId) { found = String(r2.visitorId); break; }
+                    if (r2 && typeof r2.then === 'function') {
+                      (function (_k2, _v2) {
+                        try {
+                          r2.then(function (ar2) {
+                            try {
+                              var _nc2 = normCreepResult(ar2);
+                              if (_nc2) {
+                                coreWindow.__creep_fp = _nc2.fp;
+                                coreWindow.__creep_fallback = false;
+                                coreWindow.directjscd = coreWindow.directjscd || {};
+                                coreWindow.directjscd.creep_visitor = _nc2.fp;
+                                coreWindow.directjscd.finger = _nc2.fp;
+                                coreWindow.directjscd.visitorId = _nc2.fp;
+                                try { gmWriteCreep(_nc2.fp, _nc2.trust, _nc2.lies); } catch (ePd) {}
+                                log('Lấy creep async từ bundle: ' + _k2, 'success');
+                              }
+                            } catch (ePe) {}
+                          }).catch(function () {});
+                        } catch (ePf) {}
+                      })(k + '.' + sk, v);
+                      continue;
+                    }
+                    var _nc3 = normCreepResult(r2);
+                    if (_nc3) {
+                      found = _nc3.fp;
+                      try { coreWindow.__creep_trust = _nc3.trust; coreWindow.__creep_lies = _nc3.lies; } catch (ePg) {}
+                      break;
+                    }
                     if (typeof r2 === 'string' && r2.length >= 8) { found = r2; break; }
-                  } catch (e13) {}
+                  } catch (e2) {}
                 }
               }
             }
@@ -1102,19 +1199,20 @@
                 coreWindow.__creep_fetching = true;
                 P.get().then(function (r) {
                   try {
-                    if (r && r.visitorId) {
-                      coreWindow.__creep_fp = r.visitorId;
+                    var _nc = normCreepResult(r);
+                    if (_nc) {
+                      coreWindow.__creep_fp = _nc.fp;
                       coreWindow.__creep_fallback = false;
                       coreWindow.directjscd = coreWindow.directjscd || {};
-                      coreWindow.directjscd.creep_visitor = r.visitorId;
-                      coreWindow.directjscd.creep_trust = r.trustScore;
-                      coreWindow.directjscd.creep_lies = r.lieCount;
-                      coreWindow.directjscd.finger = r.visitorId;
-                      coreWindow.directjscd.visitorId = r.visitorId;
-                      try { window.__creep_fp = r.visitorId; } catch (e2) {}
-                      try { sessionStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e3) {}
-                      try { localStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e4) {}
-                      try { gmWriteCreep(r.visitorId, r.trustScore, r.lieCount); } catch (e5) {}
+                      coreWindow.directjscd.creep_visitor = _nc.fp;
+                      coreWindow.directjscd.creep_trust = _nc.trust;
+                      coreWindow.directjscd.creep_lies = _nc.lies;
+                      coreWindow.directjscd.finger = _nc.fp;
+                      coreWindow.directjscd.visitorId = _nc.fp;
+                      try { window.__creep_fp = _nc.fp; } catch (e2) {}
+                      try { sessionStorage.setItem(CREEP_SS_KEY, _nc.fp); } catch (e3) {}
+                      try { localStorage.setItem(CREEP_SS_KEY, _nc.fp); } catch (e4) {}
+                      try { gmWriteCreep(_nc.fp, _nc.trust, _nc.lies); } catch (e5) {}
                     }
                   } catch (e5) {}
                 }).catch(function () {});
@@ -1234,7 +1332,7 @@
     var hasCsrfForm = document.querySelector('input[name="_csrfToken"]') !== null;
     var ORIGINAL_LINK_RE = /<a[^>]+href=["']([^"']+)["'][^>]*>Link\s*Gốc<\/a>/i;
     var originalLinkMatch = document.body.innerHTML.match(ORIGINAL_LINK_RE);
-    if (!isGuideHost && !hasCsrfForm && !originalLinkMatch && !hostname.includes('octolink.vip'))
+    if (!isGuideHost && !hasCsrfForm && !originalLinkMatch && !__isOctoHost(hostname))
       return;
     let styleEl = document.createElement('style');
     styleEl.textContent = "\n:root{\n  --oc-bg:#08060f; --oc-bg2:#0d0a1a;\n  --oc-accent:#a855f7; --oc-accent2:#22d3ee; --oc-accent3:#f472b6;\n  --oc-text:#e9e6f5; --oc-dim:#9b93b8;\n  --oc-ok:#34d399; --oc-warn:#fbbf24; --oc-err:#fb7185; --oc-sys:#60a5fa;\n}\n@keyframes oc-in{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}\n@keyframes oc-pop{0%{opacity:0;transform:translateY(10px) scale(.96)}60%{transform:translateY(-2px) scale(1.01)}100%{opacity:1;transform:none}}\n@keyframes oc-spin{to{transform:rotate(360deg)}}\n@keyframes oc-aurora{0%{transform:translate(-12%,-8%) rotate(0deg)}50%{transform:translate(10%,8%) rotate(180deg)}100%{transform:translate(-12%,-8%) rotate(360deg)}}\n@keyframes oc-sheen{0%{background-position:-200% 0}100%{background-position:200% 0}}\n@keyframes oc-breathe{0%,100%{opacity:.55}50%{opacity:1}}\n@keyframes oc-float{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-9px) rotate(3deg)}}\n@keyframes oc-ring{0%{box-shadow:0 0 0 0 rgba(168,85,247,.55)}100%{box-shadow:0 0 0 14px rgba(168,85,247,0)}}\n@keyframes oc-bar{0%{background-position:0 0}100%{background-position:28px 0}}\n\n.lux-panel{\n  position:fixed; bottom:26px; right:26px; width:412px; height:396px;\n  z-index:2147483647; display:flex; flex-direction:column; overflow:visible;\n  color:var(--oc-text);\n  font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;\n  font-size:13.5px; border-radius:20px;\n  background:\n    linear-gradient(180deg,rgba(20,16,34,.92),rgba(8,6,15,.96));\n  border:1px solid rgba(168,85,247,.22);\n  box-shadow:\n    0 24px 60px -12px rgba(0,0,0,.85),\n    0 0 0 1px rgba(255,255,255,.04) inset,\n    0 1px 0 rgba(255,255,255,.07) inset;\n  backdrop-filter:blur(22px) saturate(150%);\n  -webkit-backdrop-filter:blur(22px) saturate(150%);\n  animation:oc-pop .45s cubic-bezier(.2,.9,.25,1) both;\n  transition:height .34s cubic-bezier(.4,0,.2,1), width .34s cubic-bezier(.4,0,.2,1), box-shadow .3s;\n  will-change:height;\n}\n.lux-panel::before{ /* animated aurora wash */\n  content:''; position:absolute; inset:-40%; border-radius:50%; pointer-events:none;\n  background:\n    radial-gradient(38% 38% at 30% 30%,rgba(168,85,247,.30),transparent 70%),\n    radial-gradient(34% 34% at 70% 40%,rgba(34,211,238,.20),transparent 70%),\n    radial-gradient(30% 30% at 50% 75%,rgba(244,114,182,.18),transparent 70%);\n  filter:blur(26px); opacity:.85; animation:oc-aurora 22s linear infinite; z-index:0;\n}\n.lux-panel::after{ /* gradient hairline border */\n  content:''; position:absolute; inset:0; border-radius:20px; padding:1px; pointer-events:none;\n  background:linear-gradient(135deg,rgba(168,85,247,.75),rgba(34,211,238,.35) 40%,transparent 65%,rgba(244,114,182,.45));\n  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);\n  -webkit-mask-composite:xor; mask-composite:exclude; z-index:2;\n}\n.lux-panel.oc-collapsed{height:58px!important;width:300px!important}\n.lux-panel.oc-drag{transition:none; box-shadow:0 30px 80px -10px rgba(0,0,0,.95)}\n\n.arh-sticker{\n  position:absolute; top:-26px; left:-16px; z-index:5;\n  animation:oc-float 5s ease-in-out infinite;\n  filter:drop-shadow(0 8px 16px rgba(168,85,247,.5));\n}\n\n.lux-header{\n  position:relative; z-index:3; flex:0 0 auto;\n  display:flex; align-items:center; justify-content:space-between; gap:10px;\n  padding:13px 14px 13px 16px; border-radius:20px 20px 0 0;\n  background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.015));\n  border-bottom:1px solid rgba(255,255,255,.07);\n  cursor:grab; user-select:none;\n}\n.lux-header:active{cursor:grabbing}\n.oc-brand{display:flex;align-items:center;gap:10px;min-width:0}\n.oc-dot{\n  width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:var(--oc-ok);\n  box-shadow:0 0 10px var(--oc-ok); animation:oc-ring 2.2s ease-out infinite;\n}\n.oc-dot.oc-busy{background:var(--oc-accent2);box-shadow:0 0 10px var(--oc-accent2)}\n.oc-dot.oc-bad{background:var(--oc-err);box-shadow:0 0 10px var(--oc-err)}\n.oc-title{\n  font-weight:700; font-size:13px; letter-spacing:.10em; white-space:nowrap;\n  background:linear-gradient(92deg,#fff,#d8b4fe 35%,#67e8f9 65%,#fff);\n  background-size:200% auto; -webkit-background-clip:text; background-clip:text;\n  -webkit-text-fill-color:transparent; animation:oc-sheen 6s linear infinite;\n}\n.oc-sub{font-size:10px;color:var(--oc-dim);letter-spacing:.06em;margin-top:1px}\n.oc-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}\n.lux-btn{\n  -webkit-appearance:none; appearance:none; width:26px; height:26px; padding:0;\n  display:grid; place-items:center; border-radius:8px; cursor:pointer;\n  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08);\n  color:var(--oc-dim); font-size:14px; line-height:1; font-weight:700;\n  transition:all .18s ease;\n}\n.lux-btn:hover{background:rgba(168,85,247,.20);border-color:rgba(168,85,247,.5);color:#fff;transform:translateY(-1px)}\n.lux-btn:active{transform:translateY(0) scale(.94)}\n\n/* thin progress rail under the header */\n.oc-rail{position:relative;z-index:3;height:2px;flex:0 0 auto;background:rgba(255,255,255,.06);overflow:hidden}\n.oc-rail>i{\n  display:block;height:100%;width:0%;border-radius:2px;\n  background:linear-gradient(90deg,var(--oc-accent),var(--oc-accent2));\n  box-shadow:0 0 8px rgba(168,85,247,.7); transition:width .5s linear;\n}\n\n.lux-body{\n  position:relative; z-index:3; flex:1 1 auto; min-height:0;\n  padding:12px 12px 14px; overflow-y:auto; overflow-x:hidden;\n  line-height:1.55; scrollbar-width:thin; scrollbar-color:rgba(168,85,247,.45) transparent;\n  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 12px,#000 calc(100% - 10px),transparent 100%);\n          mask-image:linear-gradient(180deg,transparent 0,#000 12px,#000 calc(100% - 10px),transparent 100%);\n}\n.lux-body::-webkit-scrollbar{width:7px}\n.lux-body::-webkit-scrollbar-track{background:transparent}\n.lux-body::-webkit-scrollbar-thumb{\n  background:linear-gradient(180deg,rgba(168,85,247,.65),rgba(34,211,238,.45));\n  border-radius:99px; border:2px solid transparent; background-clip:content-box;\n}\n.lux-body::-webkit-scrollbar-thumb:hover{background:rgba(168,85,247,.9);background-clip:content-box}\n\n.log-entry{\n  position:relative; display:flex; align-items:flex-start; gap:9px;\n  margin-bottom:7px; padding:9px 11px 9px 12px; border-radius:11px;\n  background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.022));\n  border:1px solid rgba(255,255,255,.055);\n  box-shadow:0 1px 0 rgba(255,255,255,.04) inset;\n  animation:oc-in .3s cubic-bezier(.2,.9,.25,1) both;\n  transition:transform .18s ease, background .18s ease, border-color .18s ease;\n  overflow:hidden;\n}\n.log-entry:hover{transform:translateX(2px);background:rgba(255,255,255,.075);border-color:rgba(255,255,255,.11)}\n.log-entry::before{\n  content:''; position:absolute; left:0; top:0; bottom:0; width:3px; border-radius:3px 0 0 3px;\n  background:var(--oc-accent); opacity:.95;\n}\n.log-entry.lv-success::before{background:var(--oc-ok)}\n.log-entry.lv-warn::before{background:var(--oc-warn)}\n.log-entry.lv-error::before{background:var(--oc-err)}\n.log-entry.lv-system::before{background:var(--oc-sys)}\n.log-entry.lv-error{background:linear-gradient(180deg,rgba(251,113,133,.12),rgba(251,113,133,.04));border-color:rgba(251,113,133,.24)}\n.log-entry.lv-success{background:linear-gradient(180deg,rgba(52,211,153,.11),rgba(52,211,153,.035));border-color:rgba(52,211,153,.22)}\n.log-icon{flex:0 0 auto;font-size:14px;line-height:1.45;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}\n.log-body{min-width:0;flex:1 1 auto}\n.log-text{\n  display:block; color:var(--oc-text); word-break:break-word;\n  font-family:'JetBrains Mono','Cascadia Mono',Consolas,ui-monospace,monospace;\n  font-size:12.4px; letter-spacing:.1px; font-weight:500;\n}\n.log-time{display:block;margin-top:3px;font-size:9.5px;color:var(--oc-dim);letter-spacing:.08em;opacity:.75}\n\n/* countdown card */\n.oc-cd{display:flex;align-items:center;gap:12px;width:100%}\n.oc-cd-ring{position:relative;width:44px;height:44px;flex:0 0 auto}\n.oc-cd-ring svg{width:44px;height:44px;transform:rotate(-90deg);display:block}\n.oc-cd-ring .oc-trk{stroke:rgba(255,255,255,.10)}\n.oc-cd-ring .oc-arc{stroke:url(#ocGrad);transition:stroke-dashoffset .5s linear;filter:drop-shadow(0 0 5px rgba(168,85,247,.85))}\n.oc-cd-num{\n  position:absolute;inset:0;display:grid;place-items:center;\n  font-family:'JetBrains Mono',Consolas,ui-monospace,monospace;\n  font-size:12.5px;font-weight:700;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8);\n}\n.oc-cd-meta{min-width:0;flex:1 1 auto}\n.oc-cd-title{font-size:12px;font-weight:600;color:var(--oc-text);letter-spacing:.02em}\n.oc-cd-step{color:#d8b4fe}\n.oc-cd-hint{font-size:10px;color:var(--oc-dim);margin-top:3px;animation:oc-breathe 2.4s ease-in-out infinite}\n.oc-cd-bar{margin-top:6px;height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}\n.oc-cd-bar>i{\n  display:block;height:100%;border-radius:99px;\n  background:linear-gradient(90deg,var(--oc-accent),var(--oc-accent2),var(--oc-accent3));\n  background-size:200% 100%; transition:width .5s linear; animation:oc-sheen 3s linear infinite;\n}\n\n/* manual domain form */\n#manual-input-container{\n  margin:10px 2px 4px; padding:12px; border-radius:13px;\n  background:linear-gradient(180deg,rgba(168,85,247,.10),rgba(255,255,255,.03));\n  border:1px solid rgba(168,85,247,.30);\n  box-shadow:0 8px 24px -12px rgba(168,85,247,.6);\n  animation:oc-in .3s ease both;\n}\n.oc-form-label{display:block;font-size:10.5px;letter-spacing:.09em;color:var(--oc-dim);margin-bottom:7px;text-transform:uppercase}\n.oc-form-row{display:flex;gap:8px}\n#manual-domain-input{\n  flex:1 1 auto; min-width:0; padding:9px 12px; border-radius:9px;\n  background:rgba(0,0,0,.45); color:#fff; outline:none;\n  border:1px solid rgba(255,255,255,.10);\n  font:500 12.5px/1.3 'JetBrains Mono',Consolas,ui-monospace,monospace;\n  transition:border-color .18s, box-shadow .18s, background .18s;\n}\n#manual-domain-input::placeholder{color:rgba(155,147,184,.65)}\n#manual-domain-input:focus{\n  border-color:rgba(168,85,247,.75); background:rgba(0,0,0,.6);\n  box-shadow:0 0 0 3px rgba(168,85,247,.16);\n}\n#manual-domain-btn{\n  flex:0 0 auto; padding:9px 16px; border:none; border-radius:9px; cursor:pointer;\n  color:#fff; font:700 12.5px/1 'Inter',system-ui,sans-serif; letter-spacing:.03em;\n  background:linear-gradient(135deg,#a855f7,#7c3aed 55%,#22d3ee);\n  background-size:180% 180%;\n  box-shadow:0 6px 18px -6px rgba(168,85,247,.85), 0 1px 0 rgba(255,255,255,.25) inset;\n  transition:transform .16s, box-shadow .16s, background-position .35s;\n}\n#manual-domain-btn:hover{transform:translateY(-1.5px);background-position:100% 0;box-shadow:0 10px 26px -6px rgba(168,85,247,.95)}\n#manual-domain-btn:active{transform:translateY(0) scale(.97)}\n\n@media (max-width:520px){\n  .lux-panel{left:8px;right:8px;bottom:8px;width:auto;max-width:none;height:auto;max-height:42vh;border-radius:14px}\n  .lux-panel.oc-collapsed{max-height:52px!important;width:auto!important}\n  .lux-header{padding:10px 10px 10px 12px;border-radius:14px 14px 0 0}\n  .lux-body{padding:8px 8px 10px;font-size:12px}\n  .log-entry{padding:7px 9px 7px 10px;margin-bottom:5px;border-radius:9px}\n  .log-text{font-size:11px}\n  .log-time{font-size:9px}\n  .arh-sticker{width:40px!important;height:40px!important;top:-18px;left:-10px}\n  .oc-cd-ring{width:36px;height:36px}\n  .oc-cd-ring svg{width:36px;height:36px}\n  .oc-cd-num{font-size:11px}\n  .oc-cd-title{font-size:11px}\n  .oc-cd-hint{font-size:9px}\n  #manual-domain-input{padding:8px 10px;font-size:11px}\n  #manual-domain-btn{padding:8px 14px;font-size:11px}\n}\n@media (max-width:360px){\n  .lux-panel{max-height:36vh;border-radius:12px;bottom:4px;left:4px;right:4px}\n  .lux-header{padding:8px 8px 8px 10px}\n  .oc-title{font-size:11.5px}\n  .lux-body{padding:6px 6px 8px}\n  .log-entry{padding:6px 7px 6px 8px}\n  .log-text{font-size:10.5px}\n}\n@media (prefers-reduced-motion:reduce){\n  .lux-panel,.lux-panel::before,.log-entry,.oc-title,.oc-dot,.oc-cd-hint,.arh-sticker,.oc-cd-bar>i{animation:none!important}\n}\n";
@@ -1277,7 +1375,7 @@
     let panelBody = document.createElement('div');
     panelBody.className = 'lux-body';
     panel.appendChild(panelBody);
-    if (hostname.includes('octolink.vip')) panel.style.display = 'none';
+    if (__isOctoHost(hostname)) panel.style.display = 'none';
     document.body.appendChild(panel);
 
     // ---- mobile override: tắt GPU-heavy effects, panel nhỏ hơn ----------
@@ -2381,7 +2479,7 @@
         ? (log('Đã nhận diện mã nhiệm vụ: [' + missionId + ']', 'system'),
           resolveByCampaign(missionId))
         : log('Đường dẫn không hợp lệ, thiếu mã nhiệm vụ.', 'error'));
-    if (hostname.includes('octolink.vip') && !queryParams.has('redirect_to_octo')) {
+    if (__isOctoHost(hostname) && !queryParams.has('redirect_to_octo')) {
       if (pathSegments.length > 0) {
         var slug = pathSegments[pathSegments.length - 1].replace(/\.html?$/i, '');
         var firstSeg = (pathSegments[0] || '').toLowerCase();
@@ -3231,6 +3329,11 @@
       // CREEPJS-FIX: /check/device cũng cần chữ ký creep (trang octolink đã có
       // DeviceShield tính sẵn). Chờ tối đa 2.5s rồi gửi kèm header.
       waitForMainCreep(2500).then(function (fp) {
+        // API theo origin trang (octolink.vip hoặc mirror link999.app).
+        var _oOrigin = 'https://octolink.vip';
+        try {
+          if (String(hostname || '').indexOf('link999') >= 0) _oOrigin = 'https://link999.app';
+        } catch (eOo) {}
         // Lưu fp thật vào cache xuyên domain cho trang nhiệm vụ dùng lại.
         try {
           if (fp && !window.__creep_fallback) {
@@ -3243,8 +3346,8 @@
         } catch (eGm) {}
         var _devHeaders = {
           'Content-Type': 'application/x-www-form-urlencoded',
-          origin: 'https://octolink.vip',
-          referer: 'https://octolink.vip/' + alias,
+          origin: _oOrigin,
+          referer: _oOrigin + '/' + alias,
           ['user-agent']: navigator.userAgent,
           accept: 'application/json, text/javascript, */*; q=0.01'
         };
@@ -3252,7 +3355,7 @@
         if (cookieHeader !== '') _devHeaders.cookie = cookieHeader;
         safeRequest({
           method: 'POST',
-          url: 'https://octolink.vip/check/device',
+          url: _oOrigin + '/check/device',
           // dv mang creep fp (site gốc gửi device proof ở đây, không để rỗng).
           data: 'alias=' + encodeURIComponent(alias) + '&dv=' + encodeURIComponent(fp || ''),
           headers: _devHeaders,
