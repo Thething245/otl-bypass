@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.4.0
+// @version      2.5.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -476,6 +476,17 @@
         var c2 = localStorage.getItem(CREEP_SS_KEY);
         if (c2 && c2.length >= 8) return c2;
       } catch (err) {}
+      // Cache xuyên domain qua GM storage: fp thật lấy được khi mở trang
+      // octolink.vip (có DeviceShield) sẽ dùng lại được trên trang nhiệm vụ
+      // (linkhuongdan/totreview) vốn không bao giờ có lib creep.
+      try {
+        var g = gmReadCreep();
+        // Bỏ qua entry fallback (fp tự tạo) — chỉ fp thật mới được share.
+        if (g && g.fp && !g.fallback && g.fp.length >= 8) {
+          try { window.__creep_fp = g.fp; } catch (err2) {}
+          return g.fp;
+        }
+      } catch (err) {}
       return '';
     }
     // Chờ site chính tính xong creep (DeviceShield load async, ~2.5s như live).
@@ -501,6 +512,7 @@
                     }
                     try { sessionStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e2) {}
                     try { localStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e3) {}
+                    try { gmWriteCreep(r.visitorId, r.trustScore, r.lieCount); } catch (e5b) {}
                   }
                 } catch (e4) {}
               }).catch(function () {});
@@ -520,6 +532,204 @@
             resolve(getMainCreepFp());
           }
         }, 50);
+      });
+    }
+    // ---- Cache creep xuyên domain (GM storage dùng chung mọi @match) ----
+    var CREEP_GM_KEY = 'octo_creep_fp_v1';
+    var CREEP_LIB_GM_KEY = 'octo_shield_lib_v1';
+    function gmReadCreep() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(CREEP_GM_KEY, null);
+        if (raw === null || raw === undefined) raw = localStorage.getItem(CREEP_GM_KEY);
+        if (!raw) return null;
+        var o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return o && o.fp ? o : null;
+      } catch (err) { return null; }
+    }
+    function gmWriteCreep(fp, trust, lies) {
+      if (!fp || String(fp).length < 8) return;
+      try {
+        var o = { fp: String(fp), trust: trust == null ? 95 : trust,
+                  lies: lies == null ? 0 : lies, ts: Date.now() };
+        var text = JSON.stringify(o);
+        try { if (typeof GM_setValue === 'function') GM_setValue(CREEP_GM_KEY, text); } catch (e2) {}
+        try { localStorage.setItem(CREEP_GM_KEY, text); } catch (e3) {}
+      } catch (err) {}
+    }
+    // Fallback cuối cùng khi không đâu có fp thật: tự tạo fp thiết bị ỔN ĐỊNH
+    // từ tín hiệu THẬT (canvas/webgl/UA/màn hình — không spoof nên lies=0).
+    // Server có thể vẫn từ chối nếu nó verify thuật toán CreepJS, nhưng còn
+    // hơn gửi rỗng (chắc chắn rớt "Thiếu chữ ký").
+    var _localFpCache = null;
+    function genLocalDeviceFp() {
+      if (_localFpCache && _localFpCache.length >= 8) return _localFpCache;
+      try {
+        var saved = gmReadCreep();
+        if (saved && saved.fallback && saved.fp.length >= 8) {
+          _localFpCache = saved.fp;
+          return _localFpCache;
+        }
+      } catch (err) {}
+      try {
+        var parts = [];
+        try { parts.push('ua=' + (navigator.userAgent || '')); } catch (e2) {}
+        try { parts.push('plat=' + (navigator.platform || '')); } catch (e3) {}
+        try { parts.push('lang=' + (navigator.language || '') + '|' + ((navigator.languages || []).join(','))); } catch (e4) {}
+        try { parts.push('hw=' + (navigator.hardwareConcurrency || '') + '/' + (navigator.deviceMemory || '')); } catch (e5) {}
+        try { parts.push('scr=' + screen.width + 'x' + screen.height + 'x' + screen.colorDepth + 'x' + (window.devicePixelRatio || 1)); } catch (e6) {}
+        try { parts.push('tz=' + (new Date().getTimezoneOffset()) + '|' + Intl.DateTimeFormat().resolvedOptions().timeZone); } catch (e7) {}
+        try {
+          var cc = document.createElement('canvas');
+          cc.width = 220; cc.height = 50;
+          var cx = cc.getContext('2d');
+          cx.textBaseline = 'top'; cx.font = '14px Arial';
+          cx.fillStyle = '#069'; cx.fillText(String(navigator.userAgent || '').slice(0, 48), 2, 8);
+          cx.fillStyle = 'rgba(102,204,0,0.7)'; cx.fillRect(4, 28, 120, 14);
+          parts.push('cv=' + cc.toDataURL().slice(0, 512));
+        } catch (e8) {}
+        try {
+          var gc = document.createElement('canvas').getContext('webgl');
+          if (gc) {
+            var dbg = gc.getExtension('WEBGL_debug_renderer_info');
+            parts.push('gl=' + gc.getParameter(gc.VERSION) + '|' +
+              (dbg ? gc.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gc.getParameter(gc.RENDERER)));
+          }
+        } catch (e9) {}
+        var fp = md5(parts.join('~')).toLowerCase() + md5(USER_AGENT + '|' + FP_REAL.screen).toLowerCase().slice(0, 16);
+        _localFpCache = fp;
+        try {
+          var o = { fp: fp, fallback: true, trust: 95, lies: 0, ts: Date.now() };
+          var text = JSON.stringify(o);
+          try { if (typeof GM_setValue === 'function') GM_setValue(CREEP_GM_KEY, text); } catch (e10) {}
+        } catch (e11) {}
+        return fp;
+      } catch (err) { return ''; }
+    }
+    // ---- Tự tải lib DeviceShield/CreepJS của octolink về iframe core ----
+    // Iframe about:blank không có lib này nên kick() mãi rỗng. Tải source qua
+    // GM_xhr (không vướng CORS) rồi chèn text vào iframe: lib chạy trên đúng
+    // máy/trình duyệt này nên visitorId là thật.
+    var _shieldDiscoveryRunning = false;
+    var _shieldDiscoveryDone = false;
+    function shieldLibUrlsCached() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(CREEP_LIB_GM_KEY, null);
+        if (!raw) return [];
+        var o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!o || !o.urls || !o.urls.length) return [];
+        if (Date.now() - (o.ts || 0) > 24 * 3600 * 1000) return [];
+        return o.urls;
+      } catch (err) { return []; }
+    }
+    function injectShieldSource(coreWindow, src) {
+      try {
+        if (!coreWindow || !coreWindow.document || !src || src.length < 1000) return false;
+        var doc = coreWindow.document;
+        var el = doc.createElement('script');
+        el.textContent = src;
+        (doc.body || doc.head || doc.documentElement).appendChild(el);
+        return true;
+      } catch (err) { return false; }
+    }
+    function fetchAndInjectShieldLib(coreWindow, url) {
+      try {
+        if (coreWindow.__shieldInjected && coreWindow.__shieldInjected[url]) return;
+      } catch (err) {}
+      safeRequest({
+        method: 'GET',
+        url: url,
+        timeout: 0x1f40,
+        headers: {
+          accept: '*/*',
+          referer: 'https://octolink.vip/',
+          'user-agent': USER_AGENT
+        },
+        onload: function (resp) {
+          var src = resp.responseText || '';
+          if (src.length < 1000) return;
+          // Bỏ qua core đã biết (tránh chèn trùng shortearn/rawfp/jsconfig).
+          var low = url.toLowerCase();
+          if (low.indexOf('shortearn') >= 0 || low.indexOf('rawfp') >= 0 ||
+              low.indexOf('jsconfig') >= 0 || low.indexOf('ext-detect') >= 0) return;
+          if (injectShieldSource(coreWindow, src)) {
+            try {
+              coreWindow.__shieldInjected = coreWindow.__shieldInjected || {};
+              coreWindow.__shieldInjected[url] = true;
+            } catch (e2) {}
+            log('Đã nạp lib DeviceShield vào core (' + url.split('/').pop() + ').', 'system');
+          }
+        }
+      });
+    }
+    function ensureShieldLibInCore(coreWindow) {
+      try {
+        if ((coreWindow.DeviceShield && coreWindow.DeviceShield.get) ||
+            (coreWindow.CreepJS && coreWindow.CreepJS.get)) return;
+      } catch (err) { return; }
+      var cached = shieldLibUrlsCached();
+      var i;
+      if (cached.length) {
+        for (i = 0; i < Math.min(cached.length, 3); i++) fetchAndInjectShieldLib(coreWindow, cached[i]);
+        return;
+      }
+      if (_shieldDiscoveryRunning || _shieldDiscoveryDone) return;
+      _shieldDiscoveryRunning = true;
+      log('Dò lib DeviceShield từ octolink.vip để tạo fp thật...', 'system');
+      safeRequest({
+        method: 'GET',
+        url: 'https://octolink.vip/',
+        timeout: 0x1f40,
+        headers: {
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          referer: 'https://www.google.com/',
+          'user-agent': USER_AGENT
+        },
+        onload: function (resp) {
+          _shieldDiscoveryRunning = false;
+          _shieldDiscoveryDone = true;
+          try {
+            var html = resp.responseText || '';
+            var urls = [];
+            var re = /<script[^>]+src=["']([^"']+)["']/gi;
+            var m;
+            while ((m = re.exec(html))) {
+              var u = m[1];
+              if (!u || u.indexOf('data:') === 0) continue;
+              var lu = u.toLowerCase();
+              if (/jquery|googletag|analytics|adsense|facebook|gtag/i.test(u)) continue;
+              if (lu.indexOf('shortearn') >= 0 || lu.indexOf('rawfp') >= 0 ||
+                  lu.indexOf('jsconfig') >= 0 || lu.indexOf('ext-detect') >= 0) continue;
+              if (/shield|creep|device|finger|visitor|trust|attest|proof/i.test(u) ||
+                  (u.indexOf('/js/') >= 0 && /\.js(\?|$)/i.test(u))) {
+                if (u.indexOf('//') === 0) u = 'https:' + u;
+                else if (u.charAt(0) === '/') u = 'https://octolink.vip' + u;
+                else if (u.indexOf('http') !== 0) u = 'https://octolink.vip/' + u;
+                if (urls.indexOf(u) < 0) urls.push(u);
+              }
+              if (urls.length >= 4) break;
+            }
+            if (urls.length) {
+              try {
+                var text = JSON.stringify({ urls: urls, ts: Date.now() });
+                if (typeof GM_setValue === 'function') GM_setValue(CREEP_LIB_GM_KEY, text);
+              } catch (e2) {}
+              log('Tìm thấy ' + urls.length + ' lib fingerprint, đang nạp...', 'system');
+              for (var k = 0; k < urls.length; k++) fetchAndInjectShieldLib(coreWindow, urls[k]);
+            } else {
+              log('Không dò được lib DeviceShield (dùng fp cache/fallback).', 'warn');
+            }
+          } catch (err) {}
+        },
+        onerror: function () {
+          _shieldDiscoveryRunning = false;
+          _shieldDiscoveryDone = true;
+        },
+        ontimeout: function () {
+          _shieldDiscoveryRunning = false;
+          _shieldDiscoveryDone = true;
+        }
       });
     }
     // Copy creep + DeviceShield sang iframe core, chờ core có fp (tối đa timeout).
@@ -572,6 +782,7 @@
                   try {
                     if (r && r.visitorId) {
                       coreWindow.__creep_fp = r.visitorId;
+                      coreWindow.__creep_fallback = false;
                       coreWindow.directjscd = coreWindow.directjscd || {};
                       coreWindow.directjscd.creep_visitor = r.visitorId;
                       coreWindow.directjscd.creep_trust = r.trustScore;
@@ -581,6 +792,7 @@
                       try { window.__creep_fp = r.visitorId; } catch (e2) {}
                       try { sessionStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e3) {}
                       try { localStorage.setItem(CREEP_SS_KEY, r.visitorId); } catch (e4) {}
+                      try { gmWriteCreep(r.visitorId, r.trustScore, r.lieCount); } catch (e5) {}
                     }
                   } catch (e5) {}
                 }).catch(function () {});
@@ -588,8 +800,14 @@
             } catch (err) {}
           }
           kickCore();
-          function readCoreFp() {
+          // Không có fp thật ở đâu: thử nạp lib DeviceShield của octolink vào
+          // iframe để tự tính (chạy nền, retry sau sẽ nhặt được).
+          try { ensureShieldLibInCore(coreWindow); } catch (err) {}
+          function readCoreFp(skipFb) {
             try {
+              if (skipFb) {
+                try { if (coreWindow.__creep_fallback) return getMainCreepFp(); } catch (eFb) {}
+              }
               if (coreWindow.__creep_fp && String(coreWindow.__creep_fp).length >= 8)
                 return coreWindow.__creep_fp;
             } catch (err) {}
@@ -600,11 +818,13 @@
             } catch (err) {}
             return getMainCreepFp();
           }
-          var fast = readCoreFp();
+          // Fast-path bỏ qua fp fallback cũ để retry sau có cơ hội lên fp thật.
+          var fast = readCoreFp(true);
           if (fast) {
             // Đồng bộ ngược vào core rồi resolve ngay (không chờ hết timeout).
             try {
               coreWindow.__creep_fp = fast;
+              coreWindow.__creep_fallback = false;
               coreWindow.directjscd = coreWindow.directjscd || {};
               coreWindow.directjscd.creep_visitor = fast;
               coreWindow.directjscd.finger = fast;
@@ -616,11 +836,12 @@
           var t0 = Date.now();
           var iv = setInterval(function () {
             kickCore();
-            var f = readCoreFp();
+            var f = readCoreFp(true);
             if (f) {
               clearInterval(iv);
               try {
                 coreWindow.__creep_fp = f;
+                coreWindow.__creep_fallback = false;
                 coreWindow.directjscd = coreWindow.directjscd || {};
                 coreWindow.directjscd.creep_visitor = f;
                 coreWindow.directjscd.finger = f;
@@ -631,7 +852,28 @@
             }
             if (Date.now() - t0 >= timeoutMs) {
               clearInterval(iv);
-              resolve(readCoreFp());
+              var last = readCoreFp(false);
+              if (last) { resolve(last); return; }
+              // Hết giờ vẫn không có fp thật: dùng fp thiết bị tự tạo (ổn định,
+              // đã cache) để request không bị rỗng. CHỈ giữ trong core, không
+              // lan ra window/session/GM-thật để retry sau vẫn lên được fp thật.
+              try {
+                var fb = genLocalDeviceFp();
+                if (fb) {
+                  coreWindow.__creep_fp = fb;
+                  coreWindow.directjscd = coreWindow.directjscd || {};
+                  coreWindow.directjscd.creep_visitor = fb;
+                  if (!coreWindow.directjscd.creep_trust) coreWindow.directjscd.creep_trust = 95;
+                  if (coreWindow.directjscd.creep_lies === undefined) coreWindow.directjscd.creep_lies = 0;
+                  coreWindow.directjscd.finger = fb;
+                  coreWindow.directjscd.visitorId = fb;
+                  coreWindow.__creep_fallback = true;
+                  log('Dùng fp thiết bị tự tạo (fallback) — server có thể vẫn từ chối nếu verify thuật toán.', 'warn');
+                  resolve(fb);
+                  return;
+                }
+              } catch (e7) {}
+              resolve('');
             }
           }, 50);
         } catch (err) {
@@ -2470,19 +2712,25 @@
         return;
       }
       log('Mở cổng thiết bị ẩn cho: ' + alias + '...', 'system');
+      var _gateHeaders = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        origin: 'https://octolink.vip',
+        referer: 'https://octolink.vip/' + alias,
+        'user-agent': navigator.userAgent,
+        accept: 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        cookie: cookieHeader
+      };
+      // Best-effort: gắn creep sẵn có (GM cache) — không chờ để khỏi chậm probe.
+      try {
+        var _gfp = getMainCreepFp();
+        if (_gfp) _gateHeaders['content-value-fp'] = String(_gfp);
+      } catch (eGfp) {}
       safeRequest({
         method: 'POST',
         url: 'https://octolink.vip/check/device',
         data: 'alias=' + encodeURIComponent(alias) + '&dv=',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          origin: 'https://octolink.vip',
-          referer: 'https://octolink.vip/' + alias,
-          'user-agent': navigator.userAgent,
-          accept: 'application/json, text/javascript, */*; q=0.01',
-          'X-Requested-With': 'XMLHttpRequest',
-          cookie: cookieHeader
-        },
+        headers: _gateHeaders,
         timeout: 0xea60,
         onload: function (response) {
           try {
@@ -2658,6 +2906,16 @@
       // CREEPJS-FIX: /check/device cũng cần chữ ký creep (trang octolink đã có
       // DeviceShield tính sẵn). Chờ tối đa 2.5s rồi gửi kèm header.
       waitForMainCreep(2500).then(function (fp) {
+        // Lưu fp thật vào cache xuyên domain cho trang nhiệm vụ dùng lại.
+        try {
+          if (fp && !window.__creep_fallback) {
+            var _t = null, _l = null;
+            try {
+              if (window.directjscd) { _t = window.directjscd.creep_trust; _l = window.directjscd.creep_lies; }
+            } catch (eTl) {}
+            gmWriteCreep(fp, _t, _l);
+          }
+        } catch (eGm) {}
         var _devHeaders = {
           'Content-Type': 'application/x-www-form-urlencoded',
           origin: 'https://octolink.vip',
@@ -3413,7 +3671,10 @@
             // CREEPJS-FIX: chờ creep trước khi register fp/raw (live core cần
             // __creep_fp để build header content-value-fp).
             ensureCreepInCore(frameWindow, 2500).then(function (fp) {
-              if (fp) log('CreepJS fingerprint sẵn sàng (' + String(fp).slice(0, 12) + '...).', 'success');
+              var _lfb = false;
+              try { _lfb = !!frameWindow.__creep_fallback; } catch (eLfb) {}
+              if (fp && !_lfb) log('CreepJS fingerprint sẵn sàng (' + String(fp).slice(0, 12) + '...).', 'success');
+              else if (fp) log('CreepJS fp fallback (tự tạo) — chờ lib thật ở retry sau.', 'warn');
               else log('Chưa có CreepJS fp — vẫn tiếp tục, server có thể từ chối.', 'warn');
               registerRawFingerprint(frameWindow, function () {
                 done(coreCtx);
@@ -3756,7 +4017,10 @@
                 // (live _0x5964c4 await waitCreep(2000)). Nếu không, server trả
                 // "Thiếu chữ ký định danh thiết bị (CreepJS Fingerprint)".
                 ensureCreepInCore(w, 2500).then(function (creepFp) {
-                  if (creepFp) log('CreepJS fp kèm /check/job (' + String(creepFp).slice(0, 10) + '...).', 'system');
+                  var _isFb = false;
+                  try { _isFb = !!w.__creep_fallback; } catch (eFb) {}
+                  if (creepFp && !_isFb) log('CreepJS fp kèm /check/job (' + String(creepFp).slice(0, 10) + '...).', 'system');
+                  else if (creepFp) log('CreepJS fp fallback kèm /check/job (' + String(creepFp).slice(0, 10) + '...).', 'warn');
                   else log('Không có CreepJS fp cho /check/job — server có thể từ chối.', 'warn');
                   var guardPayload = w.__b110671(),
                     guardHeaders = buildGuardHeaders(w, '/check/job', guardPayload);
