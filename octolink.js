@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.5.0
+// @version      2.6.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -409,6 +409,27 @@
         'document.cookie="from_google=true; path=/";}catch(e){}}catch(e){}})();'
       );
     }
+    // tm trong directjscd PHẢI ổn định theo thiết bị: bản cũ random mỗi lần
+    // dựng core (mỗi retry 1 giá trị) = server thấy "đổi thiết bị giữa các
+    // bước". Cache vĩnh viễn 1 giá trị vào GM storage.
+    var OCTO_TM_KEY = 'octo_tm_v1';
+    function getStableTm() {
+      try {
+        var raw = null;
+        if (typeof GM_getValue === 'function') raw = GM_getValue(OCTO_TM_KEY, null);
+        if (raw === null || raw === undefined) raw = localStorage.getItem(OCTO_TM_KEY);
+        if (raw && /^[0-9]{4},[0-9]{4},[0-9]{4}$/.test(raw)) return raw;
+      } catch (err) {}
+      var v = '';
+      try {
+        var p = [];
+        for (var i = 0; i < 3; i++) p.push(String(1000 + Math.floor(Math.random() * 8000)));
+        v = p.join(',');
+        try { if (typeof GM_setValue === 'function') GM_setValue(OCTO_TM_KEY, v); } catch (e2) {}
+        try { localStorage.setItem(OCTO_TM_KEY, v); } catch (e3) {}
+      } catch (err) { v = '1000,1000,1000'; }
+      return v;
+    }
     function buildDirectjscdScript() {
       // CREEPJS-FIX: cv hardcode + tm random là lie (canvas hash phải khớp GPU
       // thật, tm phải ổn định). Tính canvas hash THẬT ngay trong iframe, creep
@@ -433,7 +454,7 @@
         FP_REAL.deviceMemory +
         ',ua:_ua,lang:(navigator.language||' +
         jsLiteral(FP_REAL.language) +
-        '),tz:_tz,cv:_cv,tm:_tm(),it:0,te:0,mobile:' +
+        '),tz:_tz,cv:_cv,tm:' + jsLiteral(getStableTm()) + ',it:0,te:0,mobile:' +
         (FP_REAL.mobile ? 'true' : 'false') +
         ',cookies:true,screen:((screen&&screen.width)||1920)+"x"+((screen&&screen.height)||1080),' +
         'userscript:0,userscript_score:0,gm_apis:false,extension_runtime:false,' +
@@ -812,12 +833,32 @@
                 return coreWindow.__creep_fp;
             } catch (err) {}
             try {
-              if (coreWindow.directjscd && coreWindow.directjscd.creep_visitor &&
-                  String(coreWindow.directjscd.creep_visitor).length >= 8)
-                return coreWindow.directjscd.creep_visitor;
+              var _d = coreWindow.directjscd;
+              if (_d && typeof _d === 'object') {
+                // rawfp thật có thể đặt creep dưới nhiều tên khác nhau.
+                var _cands = [_d.creep_visitor, _d.visitorId, _d.finger, _d.creep_fp];
+                for (var _ci = 0; _ci < _cands.length; _ci++) {
+                  if (_cands[_ci] && String(_cands[_ci]).length >= 8) return _cands[_ci];
+                }
+              }
+            } catch (err) {}
+            try {
+              if (coreWindow.sessionStorage) {
+                var _ss = coreWindow.sessionStorage.getItem(CREEP_SS_KEY);
+                if (_ss && _ss.length >= 8) return _ss;
+              }
             } catch (err) {}
             return getMainCreepFp();
           }
+          // Chẩn đoán 1 lần/core: rawfp thật expose những key gì (kẻo creep nằm
+          // dưới tên khác mà tool không nhặt).
+          try {
+            if (!coreWindow.__keysLogged && coreWindow.directjscd) {
+              coreWindow.__keysLogged = true;
+              var _ks = Object.keys(coreWindow.directjscd).slice(0, 40).join(',');
+              log('directjscd keys: ' + _ks, 'system');
+            }
+          } catch (eKeys) {}
           // Fast-path bỏ qua fp fallback cũ để retry sau có cơ hội lên fp thật.
           var fast = readCoreFp(true);
           if (fast) {
@@ -3094,9 +3135,13 @@
           } catch (err2) {}
           if (!_cfp) {
             try {
-              if (coreWindow.directjscd && coreWindow.directjscd.creep_visitor &&
-                  String(coreWindow.directjscd.creep_visitor).length >= 8)
-                _cfp = coreWindow.directjscd.creep_visitor;
+              var _dd = coreWindow.directjscd;
+              if (_dd && typeof _dd === 'object') {
+                var _cc = [_dd.creep_visitor, _dd.visitorId, _dd.finger];
+                for (var _cki = 0; _cki < _cc.length; _cki++) {
+                  if (_cc[_cki] && String(_cc[_cki]).length >= 8) { _cfp = _cc[_cki]; break; }
+                }
+              }
             } catch (err3) {}
           }
         }
@@ -3984,6 +4029,11 @@
                 _freshRd
                   ? ((rdToken = _freshRd),
                     (w.rd = rdToken),
+                    // FIX "đổi thiết bị giữa các bước": core vẫn là iframe cũ
+                    // (fingerprint giữ nguyên), chỉ rd xoay — phải đồng bộ
+                    // coreCtx.rd kẻo attempt sau so lệch rồi rebuild core mới
+                    // (tm/seed mới = server thấy thiết bị khác).
+                    (function () { try { ctx.rd = rdToken; coreCtx.rd = rdToken; } catch (eSync) {} })(),
                     log('Mã hóa đã làm mới: ' + rdToken.slice(0, 16) + '...', 'success'))
                   : log('Không thể làm mới mã hóa, dùng giá trị cũ.', 'warn');
                 function readNumber(name) {
