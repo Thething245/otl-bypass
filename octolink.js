@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.8.0
+// @version      2.9.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -40,12 +40,70 @@
   // không giải được nữa. Phải return TRƯỚC khi chạm vào bất cứ thứ gì,
   // không chỉ trước main().
   // ====================================================================
+  // Thu creep THẬT thụ động trên trang captcha /finish (chỉ ĐỌC window +
+  // sessionStorage + gọi DeviceShield.get() sẵn có của site — không chạm DOM,
+  // không request mạng nên an toàn captcha). Lưu GM cho tab nhiệm vụ dùng lại.
+  function __octoPassiveCreepHarvest() {
+    try {
+      var host = '';
+      try { host = String(window.location.hostname || '').toLowerCase(); } catch (e0) {}
+      if (host !== 'octolink.vip' && host.slice(-13) !== '.octolink.vip') return;
+      var KEY = '__octo_creep_fp', GMK = 'octo_creep_fp_v1', finished = false;
+      function save(fp, trust, lies) {
+        if (!fp || String(fp).length < 8 || finished) return;
+        finished = true;
+        try {
+          var o = JSON.stringify({ fp: String(fp), trust: trust == null ? 95 : trust,
+            lies: lies == null ? 0 : lies, ts: Date.now() });
+          if (typeof GM_setValue === 'function') GM_setValue(GMK, o);
+          console.log('[Octo] Đã lưu CreepJS fp thật cho tab nhiệm vụ.');
+        } catch (e1) {}
+      }
+      function read() {
+        try { if (window.__creep_fp && String(window.__creep_fp).length >= 8) return window.__creep_fp; } catch (e2) {}
+        try {
+          if (window.directjscd) {
+            var c = [window.directjscd.creep_visitor, window.directjscd.visitorId, window.directjscd.finger];
+            for (var i = 0; i < c.length; i++) if (c[i] && String(c[i]).length >= 8) return c[i];
+          }
+        } catch (e3) {}
+        try {
+          var s = sessionStorage.getItem(KEY);
+          if (s && s.length >= 8) return s;
+        } catch (e4) {}
+        return '';
+      }
+      function kick() {
+        try {
+          var P = window.DeviceShield || window.CreepJS;
+          if (P && P.get && !window.__creep_fetching) {
+            window.__creep_fetching = true;
+            P.get().then(function (r) {
+              try { if (r && r.visitorId) save(r.visitorId, r.trustScore, r.lieCount); } catch (e5) {}
+            }).catch(function () {});
+          }
+        } catch (e6) {}
+      }
+      var hit = read();
+      if (hit) { save(hit); return; }
+      kick();
+      var t0 = Date.now(), iv = setInterval(function () {
+        try {
+          var f = read();
+          if (f) { clearInterval(iv); save(f); return; }
+          kick();
+          if (Date.now() - t0 > 90000) clearInterval(iv);
+        } catch (e7) { try { clearInterval(iv); } catch (e8) {} }
+      }, 1000);
+    } catch (err) {}
+  }
   try {
     var _h = String(window.location.hostname || '').toLowerCase();
     var _p = String(window.location.pathname || '');
     var _isOcto = _h === 'octolink.vip' || _h.slice(-13) === '.octolink.vip';
     if (_isOcto && /^\/+finish(\/|$)/i.test(_p)) {
       console.log('[Octo] Trang captcha — script tự tắt để không cản việc giải captcha.');
+      try { __octoPassiveCreepHarvest(); } catch (eHv) {}
       return;
     }
   } catch (err) {}
@@ -218,6 +276,8 @@
     var apiOrigin = '';
     var coreCtx = null;
     var demoRetried = 0;
+    // Số lần server báo "đổi thiết bị" liên tiếp (để gợi ý reset phiên).
+    var devChangeStreak = 0;
     // Số lần thử lại khi server trả token demo (phiên chưa được nhận).
     const DEMO_MAX_RETRY = 4;
     // true = nhiệm vụ bị chặn, mọi tiến trình phải dừng
@@ -3193,7 +3253,8 @@
         safeRequest({
           method: 'POST',
           url: 'https://octolink.vip/check/device',
-          data: 'alias=' + encodeURIComponent(alias) + '&dv=',
+          // dv mang creep fp (site gốc gửi device proof ở đây, không để rỗng).
+          data: 'alias=' + encodeURIComponent(alias) + '&dv=' + encodeURIComponent(fp || ''),
           headers: _devHeaders,
         timeout: 0xea60,
         onload: function (response) {
@@ -3583,6 +3644,29 @@
               'x-hy3n-token': rdToken,
               'x-hy3n-ts': String(timestamp)
             };
+            // FIX "đổi thiết bị giữa các bước": live gửi creep trên MỌI request
+            // (_0x2fe0fe). Bản cũ thiếu header này ở /fp/raw nên bước đăng ký
+            // (không creep) lệch với bước /check/job (có creep).
+            try {
+              var _rfp = '';
+              try {
+                if (coreWindow.__creep_fp && String(coreWindow.__creep_fp).length >= 8)
+                  _rfp = coreWindow.__creep_fp;
+              } catch (eR1) {}
+              if (!_rfp) {
+                try {
+                  var _rd = coreWindow.directjscd;
+                  if (_rd) {
+                    var _rc = [_rd.creep_visitor, _rd.visitorId, _rd.finger];
+                    for (var _ri = 0; _ri < _rc.length; _ri++) {
+                      if (_rc[_ri] && String(_rc[_ri]).length >= 8) { _rfp = _rc[_ri]; break; }
+                    }
+                  }
+                } catch (eR2) {}
+              }
+              if (!_rfp) { try { _rfp = getMainCreepFp(); } catch (eR3) {} }
+              if (_rfp) headers['content-value-fp'] = String(_rfp);
+            } catch (eR4) {}
             if (cookieHeader !== '') headers.cookie = cookieHeader;
             postBinary(
               'https://octolink.vip/fp/raw',
@@ -4347,6 +4431,15 @@
                       );
                     if (job.status !== 'success') {
                       var reason = job.message || 'Domain nhiệm vụ đã đổi';
+                      // Đếm lỗi "đổi thiết bị" liên tiếp để gợi ý reset phiên.
+                      try {
+                        if (/đổi thiết bị|thiết bị duy nhất|can thiệp trình duyệt/i.test(reason)) {
+                          devChangeStreak = (devChangeStreak || 0) + 1;
+                          if (devChangeStreak === 2) {
+                            log('Phiên này đang ghim thiết bị cũ trên server. Hãy: 1) Xoá cookie của octolink.vip + domain nhiệm vụ (giữ nguyên dữ liệu Tampermonkey), 2) Tải lại trang, 3) Chạy lại — luồng mới sẽ ghim đúng thiết bị hiện tại.', 'error');
+                          }
+                        } else devChangeStreak = 0;
+                      } catch (eDcs) {}
                       return (
                         log(
                           'Server Octolink từ chối: ' +
