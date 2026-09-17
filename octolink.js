@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.6.0
+// @version      2.7.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -697,6 +697,40 @@
       }
       if (_shieldDiscoveryRunning || _shieldDiscoveryDone) return;
       _shieldDiscoveryRunning = true;
+      // a) Quét source live core (1 lần) — chính xác hơn HTML trang chủ.
+      try { scanShortearnForShieldLib(coreWindow); } catch (eScan) {}
+      // b) Đoán 4 URL phổ biến (êm, chỉ log khi trúng).
+      try {
+        var PROBES = [
+          'https://octolink.vip/js/device-shield.min.js',
+          'https://octolink.vip/js/deviceshield.min.js',
+          'https://octolink.vip/js/creep.min.js',
+          'https://octolink.vip/js/fingerprint.min.js'
+        ];
+        for (var pi2 = 0; pi2 < PROBES.length; pi2++) {
+          (function (purl) {
+            safeRequest({
+              method: 'GET',
+              url: purl,
+              timeout: 0x1f40,
+              headers: { accept: '*/*', referer: 'https://octolink.vip/', 'user-agent': USER_AGENT },
+              onload: function (pr) {
+                try {
+                  var ps = pr.responseText || '';
+                  if (ps.length > 1000 && /(visitorId|DeviceShield|CreepJS)/.test(ps)) {
+                    log('Probe trúng lib: ' + purl.split('/').pop(), 'success');
+                    try {
+                      var t2 = JSON.stringify({ urls: [purl], ts: Date.now() });
+                      if (typeof GM_setValue === 'function') GM_setValue(CREEP_LIB_GM_KEY, t2);
+                    } catch (eC) {}
+                    fetchAndInjectShieldLib(coreWindow, purl);
+                  }
+                } catch (eP) {}
+              }
+            });
+          })(PROBES[pi2]);
+        }
+      } catch (eProbes) {}
       log('Dò lib DeviceShield từ octolink.vip để tạo fp thật...', 'system');
       safeRequest({
         method: 'GET',
@@ -719,11 +753,12 @@
               var u = m[1];
               if (!u || u.indexOf('data:') === 0) continue;
               var lu = u.toLowerCase();
-              if (/jquery|googletag|analytics|adsense|facebook|gtag/i.test(u)) continue;
+              if (/jquery|googletag|analytics|adsense|facebook|gtag|wp-content|wp-includes/i.test(u)) continue;
               if (lu.indexOf('shortearn') >= 0 || lu.indexOf('rawfp') >= 0 ||
                   lu.indexOf('jsconfig') >= 0 || lu.indexOf('ext-detect') >= 0) continue;
-              if (/shield|creep|device|finger|visitor|trust|attest|proof/i.test(u) ||
-                  (u.indexOf('/js/') >= 0 && /\.js(\?|$)/i.test(u))) {
+              // Chỉ lấy file đúng tên fingerprint — bản trước lấy cả ads.js/
+              // script.min.js của theme WordPress (rác, không có DeviceShield).
+              if (/shield|creep|device-shield|deviceshield|fingerprint|visitor|attest/.test(lu)) {
                 if (u.indexOf('//') === 0) u = 'https:' + u;
                 else if (u.charAt(0) === '/') u = 'https://octolink.vip' + u;
                 else if (u.indexOf('http') !== 0) u = 'https://octolink.vip/' + u;
@@ -750,6 +785,170 @@
         ontimeout: function () {
           _shieldDiscoveryRunning = false;
           _shieldDiscoveryDone = true;
+        }
+      });
+    }
+    // ---- Moi creep từ chính bundle guard (rawfp.js 2MB) ----
+    // Bundle thu thập canvas/webgl/audio/fonts... nên visitorId thật nhiều khả
+    // năng nằm sẵn trong exports của nó dưới tên khác (visitorId/finger/...).
+    // Liệt kê exports 1 lần/core, tự gọi getter khớp tên, log lại để chẩn đoán.
+    function harvestCreepFromBundle(coreWindow) {
+      var found = '';
+      try {
+        try {
+          if (coreWindow.__creep_fp && String(coreWindow.__creep_fp).length >= 8)
+            return coreWindow.__creep_fp;
+        } catch (e0) {}
+        // Quét sâu (gọi getter) chỉ 1 lần/core — getter fingerprinting rất nặng,
+        // không gọi lại mỗi 50ms. Các tick sau chỉ check chuỗi (rẻ).
+        var deep = false;
+        try {
+          if (!coreWindow.__harvested) { coreWindow.__harvested = true; deep = true; }
+        } catch (eD) { deep = true; }
+        var roots = [];
+        try { if (coreWindow.__hy3nRawfp) roots.push(coreWindow.__hy3nRawfp); } catch (e1) {}
+        try {
+          var _g2 = ['__octo_creep_fp', 'creep_fp', '__creepFinger'];
+          for (var _gi = 0; _gi < _g2.length && !found; _gi++) {
+            try {
+              var _gv = coreWindow[_g2[_gi]];
+              if (_gv && String(_gv).length >= 8) found = String(_gv);
+            } catch (e2) {}
+          }
+        } catch (e3) {}
+        for (var ri = 0; ri < roots.length && !found; ri++) {
+          var mod = roots[ri];
+          try { if (mod && mod['default']) mod = mod['default']; } catch (e4) {}
+          try { if (mod && mod['default']) mod = mod['default']; } catch (e5) {}
+          var keys = [];
+          try { keys = Object.keys(mod || {}); } catch (e6) {}
+          try {
+            if (!coreWindow.__bundleKeysLogged && keys.length) {
+              coreWindow.__bundleKeysLogged = true;
+              log('rawfp exports (' + keys.length + '): ' + keys.slice(0, 60).join(',').slice(0, 320), 'system');
+            }
+          } catch (e7) {}
+          for (var i = 0; i < keys.length && !found; i++) {
+            var k = keys[i], v = null;
+            try { v = mod[k]; } catch (e8) { continue; }
+            if (typeof v === 'string' && v.length >= 8 && /creep|visitor|finger|shield/i.test(k)) {
+              found = v;
+              log('Lấy creep từ bundle: ' + k, 'success');
+              break;
+            }
+            if (typeof v === 'function' && deep && /visitor|creep|finger|shield|trust|lies|attest|proof|device/i.test(k)) {
+              try {
+                var r = v.call(mod);
+                if (r && typeof r === 'object' && r.visitorId) {
+                  found = String(r.visitorId);
+                  try { coreWindow.__creep_trust = r.trustScore; coreWindow.__creep_lies = r.lieCount; } catch (e9) {}
+                  log('Lấy creep từ bundle fn: ' + k, 'success');
+                  break;
+                }
+                if (typeof r === 'string' && r.length >= 8) {
+                  found = r;
+                  log('Lấy creep từ bundle fn: ' + k, 'success');
+                  break;
+                }
+              } catch (e10) {}
+            }
+            if (v && typeof v === 'object' && !found) {
+              var sub = [];
+              try { sub = Object.keys(v).slice(0, 40); } catch (e11) {}
+              for (var j = 0; j < sub.length && !found; j++) {
+                var sk = sub[j], sv = null;
+                try { sv = v[sk]; } catch (e12) { continue; }
+                if (typeof sv === 'string' && sv.length >= 8 && /creep|visitor|finger/i.test(sk)) {
+                  found = sv;
+                  log('Lấy creep từ bundle: ' + k + '.' + sk, 'success');
+                  break;
+                }
+                if (typeof sv === 'function' && deep && /visitor|creep|finger|shield/i.test(sk)) {
+                  try {
+                    var r2 = sv.call(v);
+                    if (r2 && typeof r2 === 'object' && r2.visitorId) { found = String(r2.visitorId); break; }
+                    if (typeof r2 === 'string' && r2.length >= 8) { found = r2; break; }
+                  } catch (e13) {}
+                }
+              }
+            }
+          }
+        }
+        if (found) {
+          coreWindow.__creep_fp = found;
+          coreWindow.__creep_fallback = false;
+          coreWindow.directjscd = coreWindow.directjscd || {};
+          coreWindow.directjscd.creep_visitor = found;
+          coreWindow.directjscd.finger = found;
+          coreWindow.directjscd.visitorId = found;
+          if (coreWindow.__creep_trust) coreWindow.directjscd.creep_trust = coreWindow.__creep_trust;
+          if (coreWindow.__creep_lies != null) coreWindow.directjscd.creep_lies = coreWindow.__creep_lies;
+          try { gmWriteCreep(found, coreWindow.__creep_trust, coreWindow.__creep_lies); } catch (e14) {}
+        }
+      } catch (err) {}
+      return found;
+    }
+    // ---- Quét source live core tìm URL lib DeviceShield ----
+    // shortearn.live.js tham chiếu window.DeviceShield nhưng không nạp nó —
+    // URL nằm trong source hoặc trang app. Tải full source 1 lần rồi regex.
+    var _shortearnScanned = false;
+    function scanShortearnForShieldLib(coreWindow) {
+      if (_shortearnScanned) return;
+      _shortearnScanned = true;
+      log('Quét shortearn.live.js tìm URL DeviceShield...', 'system');
+      safeRequest({
+        method: 'GET',
+        url: 'https://octolink.vip/js/shortearn.live.js?v=' + Date.now(),
+        timeout: 0x3a98,
+        headers: {
+          accept: '*/*',
+          referer: 'https://octolink.vip/',
+          'user-agent': USER_AGENT
+        },
+        onload: function (resp) {
+          try {
+            var src = resp.responseText || '';
+            if (src.length < 50000) {
+              log('shortearn tải về ngắn bất thường (' + src.length + 'B), bỏ qua.', 'warn');
+              return;
+            }
+            var seen = {}, found = [];
+            var pats = [
+              /["']((?:https?:)?\/\/[^"']*?\.js(?:\?[^"']*)?)["']/gi,
+              /["'](\/js\/[^"']+?\.js(?:\?[^"']*)?)["']/gi
+            ];
+            for (var pi = 0; pi < pats.length; pi++) {
+              var m;
+              pats[pi].lastIndex = 0;
+              while ((m = pats[pi].exec(src))) {
+                var u = m[1];
+                if (!u || seen[u]) continue;
+                seen[u] = 1;
+                var lu = u.toLowerCase();
+                if (lu.indexOf('shortearn') >= 0 || lu.indexOf('rawfp') >= 0 ||
+                    lu.indexOf('jsconfig') >= 0 || lu.indexOf('ext-detect') >= 0 ||
+                    lu.indexOf('jquery') >= 0) continue;
+                if (/shield|creep|deviceshield|fingerprint|visitor|attest/.test(lu)) {
+                  var full = u;
+                  if (full.indexOf('//') === 0) full = 'https:' + full;
+                  else if (full.charAt(0) === '/') full = 'https://octolink.vip' + full;
+                  found.push(full);
+                }
+              }
+            }
+            if (found.length) {
+              try {
+                var text = JSON.stringify({ urls: found.slice(0, 4), ts: Date.now() });
+                if (typeof GM_setValue === 'function') GM_setValue(CREEP_LIB_GM_KEY, text);
+              } catch (e2) {}
+              log('shortearn lộ ' + found.length + ' URL lib, đang nạp...', 'success');
+              for (var k = 0; k < found.length; k++) {
+                try { fetchAndInjectShieldLib(coreWindow, found[k]); } catch (e3) {}
+              }
+            } else {
+              log('shortearn không lộ URL DeviceShield.', 'warn');
+            }
+          } catch (err) {}
         }
       });
     }
@@ -795,6 +994,8 @@
           }
           // 4. Kích DeviceShield trong iframe (giống live kick()).
           function kickCore() {
+            // Moi thử creep từ bundle guard trước (không tốn request).
+            try { harvestCreepFromBundle(coreWindow); } catch (eHv) {}
             try {
               var P = coreWindow.DeviceShield || coreWindow.CreepJS;
               if (P && P.get && !coreWindow.__creep_fetching) {
