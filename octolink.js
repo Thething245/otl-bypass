@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.10.0
+// @version      2.11.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -666,7 +666,11 @@
         if (!fp || String(fp).length < 8) return null;
         var trust = (r.trustScore != null ? r.trustScore : 95);
         var lies = (r.lieCount != null ? r.lieCount : (r.lies ? r.lies.length : 0));
-        return { fp: String(fp), trust: trust, lies: lies };
+        var liesList = '';
+        try {
+          if (r.lies && r.lies.length) liesList = r.lies.slice(0, 8).join(',');
+        } catch (eL) {}
+        return { fp: String(fp), trust: trust, lies: lies, liesList: liesList };
       } catch (err) { return null; }
     }
     // Fallback cuối cùng khi không đâu có fp thật: tự tạo fp thiết bị ỔN ĐỊNH
@@ -1213,6 +1217,12 @@
                       try { sessionStorage.setItem(CREEP_SS_KEY, _nc.fp); } catch (e3) {}
                       try { localStorage.setItem(CREEP_SS_KEY, _nc.fp); } catch (e4) {}
                       try { gmWriteCreep(_nc.fp, _nc.trust, _nc.lies); } catch (e5) {}
+                      try {
+                        if (!coreWindow.__trustLogged) {
+                          coreWindow.__trustLogged = true;
+                          log('DeviceShield thật: trust=' + _nc.trust + ' lies=[' + (_nc.liesList || _nc.lies) + ']', _nc.trust >= 70 ? 'success' : 'error');
+                        }
+                      } catch (eTl) {}
                     }
                   } catch (e5) {}
                 }).catch(function () {});
@@ -4010,7 +4020,10 @@
     function runLiveCore(coreSource, config, done) {
       log('Đang dựng core live trong iframe...', 'system');
       var iframeEl = document.createElement('iframe');
-      iframeEl.style.display = 'none';
+      // KHÔNG display:none: iframe 0x0 khiến innerWidth/outer_size = 0 — tín
+      // hiệu headless kinh điển mà guard chấm (empty_outer_size). Treo ngoài
+      // màn hình với kích thước thật, vẫn vô hình với người dùng.
+      iframeEl.style.cssText = 'position:fixed;left:-10000px;top:0;width:1366px;height:768px;border:0;visibility:hidden;pointer-events:none;';
       iframeEl.setAttribute('sandbox', 'allow-scripts allow-same-origin');
       document.body.appendChild(iframeEl);
       var frameWindow = iframeEl.contentWindow;
@@ -4127,7 +4140,8 @@
       gunzipBase64(CORE_GZIP_BASE64)
         .then(function (coreBuffer) {
           var iframeEl = document.createElement('iframe');
-          iframeEl.style.display = 'none';
+          // Như core live: iframe có kích thước thật, treo ngoài màn hình.
+          iframeEl.style.cssText = 'position:fixed;left:-10000px;top:0;width:1366px;height:768px;border:0;visibility:hidden;pointer-events:none;';
           iframeEl.setAttribute('sandbox', 'allow-scripts allow-same-origin');
           document.body.appendChild(iframeEl);
           var frameWindow = iframeEl.contentWindow;
