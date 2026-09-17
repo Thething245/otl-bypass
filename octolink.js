@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chodenocto-Bypass
 // @namespace    https://chodenocto.local
-// @version      2.12.0
+// @version      2.13.0
 // @description  Auto bypass link shortener — octolink.vip / minuc.vn / linkhuongdan / totreview
 // @author       Chodenocto
 // @match        *://minuc.vn/*
@@ -4585,8 +4585,11 @@
                       try {
                         if (/đổi thiết bị|thiết bị duy nhất|can thiệp trình duyệt/i.test(reason)) {
                           devChangeStreak = (devChangeStreak || 0) + 1;
-                          if (devChangeStreak === 2) {
-                            log('Phiên này đang ghim thiết bị cũ trên server. Hãy: 1) Xoá cookie của octolink.vip + domain nhiệm vụ (giữ nguyên dữ liệu Tampermonkey), 2) Tải lại trang, 3) Chạy lại — luồng mới sẽ ghim đúng thiết bị hiện tại.', 'error');
+                          cookieHeader = '';
+                          try { window.__creep_fetching = false; } catch (eF) {}
+                          log('Đã tự động xóa cookie phiên cũ bị ghim thiết bị để tạo phiên mới...', 'system');
+                          if (devChangeStreak >= 3) {
+                            log('Phiên này đang ghim thiết bị cũ trên server. Hãy xoá cookie trình duyệt của octolink.vip rồi tải lại trang.', 'error');
                           }
                         } else devChangeStreak = 0;
                       } catch (eDcs) {}
@@ -4601,7 +4604,7 @@
                         ),
                         setTimeout(function () {
                           checkJob(rdToken, targetUrl, attempt + 1, source);
-                        }, 3000)
+                        }, 2000)
                       );
                     }
                     var waitSeconds = job.wait || 0,
