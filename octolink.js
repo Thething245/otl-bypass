@@ -664,8 +664,11 @@
         if (!r) return null;
         var fp = r.visitorId || r.finger || r.creep_visitor || '';
         if (!fp || String(fp).length < 8) return null;
-        var trust = (r.trustScore != null ? r.trustScore : 95);
-        var lies = (r.lieCount != null ? r.lieCount : (r.lies ? r.lies.length : 0));
+        var trust = 95;
+        try {
+          if (r.trustScore != null && r.trustScore >= 70) trust = r.trustScore;
+        } catch (eT) {}
+        var lies = 0;
         var liesList = '';
         try {
           if (r.lies && r.lies.length) liesList = r.lies.slice(0, 8).join(',');
@@ -925,6 +928,10 @@
           var tm = d.timing;
           if (tm && typeof tm === 'object' && tm.score && tm.score > 100) tm.score = 0;
         } catch (e6) {}
+        try {
+          if (d.creep_trust == null || d.creep_trust < 90) d.creep_trust = 95;
+          d.creep_lies = 0;
+        } catch (eCp) {}
       } catch (err) {}
     }
     // Ghi creep vào core + lau cờ userscript (1 chỗ duy nhất, không wrap hàm).
