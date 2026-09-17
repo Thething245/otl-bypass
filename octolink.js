@@ -591,44 +591,67 @@
     function waitForMainCreep(timeoutMs) {
       timeoutMs = timeoutMs || 2500;
       return new Promise(function (resolve) {
-        var hit = getMainCreepFp();
-        if (hit) { resolve(hit); return; }
-        // Kích DeviceShield/CreepJS của trang chính nếu có (giống live kick()).
-        function kickMain() {
+        var t0 = Date.now();
+        var done = false;
+        function finish(fp) {
+          if (!done) {
+            done = true;
+            resolve(fp || '');
+          }
+        }
+        function tryGetFromShield() {
           try {
             var P = window.DeviceShield || window.CreepJS;
-            if (P && P.get && !window.__creep_fetching) {
-              window.__creep_fetching = true;
-              P.get().then(function (r) {
-                try {
-                  var _n = normCreepResult(r);
-                  if (_n) {
-                    window.__creep_fp = _n.fp;
-                    if (window.directjscd && typeof window.directjscd === 'object') {
-                      window.directjscd.creep_visitor = _n.fp;
-                      window.directjscd.creep_trust = _n.trust;
-                      window.directjscd.creep_lies = _n.lies;
+            if (P && P.get) {
+              if (!window.__creep_fetching) {
+                window.__creep_fetching = true;
+                P.get().then(function (r) {
+                  try {
+                    var _n = normCreepResult(r);
+                    if (_n && _n.fp) {
+                      window.__creep_fp = _n.fp;
+                      if (window.directjscd && typeof window.directjscd === 'object') {
+                        window.directjscd.creep_visitor = _n.fp;
+                        window.directjscd.creep_trust = _n.trust;
+                        window.directjscd.creep_lies = _n.lies;
+                      }
+                      try { sessionStorage.setItem(CREEP_SS_KEY, _n.fp); } catch (e2) {}
+                      try { localStorage.setItem(CREEP_SS_KEY, _n.fp); } catch (e3) {}
+                      try { gmWriteCreep(_n.fp, _n.trust, _n.lies); } catch (e5b) {}
+                      finish(_n.fp);
+                      return;
                     }
-                    try { sessionStorage.setItem(CREEP_SS_KEY, _n.fp); } catch (e2) {}
-                    try { localStorage.setItem(CREEP_SS_KEY, _n.fp); } catch (e3) {}
-                    try { gmWriteCreep(_n.fp, _n.trust, _n.lies); } catch (e5b) {}
-                  }
-                } catch (e4) {}
-              }).catch(function () {});
+                  } catch (e4) {}
+                  finish(getMainCreepFp());
+                }).catch(function () {
+                  finish(getMainCreepFp());
+                });
+                return true;
+              }
             }
           } catch (err) {}
+          return false;
         }
-        kickMain();
-        hit = getMainCreepFp();
-        if (hit) { resolve(hit); return; }
-        var t0 = Date.now();
+        if (tryGetFromShield()) return;
+        try {
+          if (window.__creep_fp && window.__creep_fp.length >= 8) {
+            finish(window.__creep_fp);
+            return;
+          }
+        } catch (eMem) {}
         var iv = setInterval(function () {
-          var f = getMainCreepFp();
-          if (f) { clearInterval(iv); resolve(f); return; }
-          kickMain();
+          if (done) { clearInterval(iv); return; }
+          if (tryGetFromShield()) { clearInterval(iv); return; }
+          try {
+            if (window.__creep_fp && window.__creep_fp.length >= 8) {
+              clearInterval(iv);
+              finish(window.__creep_fp);
+              return;
+            }
+          } catch (eM2) {}
           if (Date.now() - t0 >= timeoutMs) {
             clearInterval(iv);
-            resolve(getMainCreepFp());
+            finish(getMainCreepFp());
           }
         }, 50);
       });
